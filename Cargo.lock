@@ -701,7 +701,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "coheteros-ground-station"
+name = "coheteros-gsui"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",

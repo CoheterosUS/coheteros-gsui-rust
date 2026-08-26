@@ -1,0 +1,25 @@
+name: Build and Upload Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Upload exe to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/coheteros-ground-station.exe
