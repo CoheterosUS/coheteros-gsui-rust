@@ -17,7 +17,7 @@ pub enum SerialEvent {
     Connected(String),
     Disconnected,
     Error(String),
-    Packet(Telemetry),
+    Packet(Box<Telemetry>),
     PortList(Vec<String>),
 }
 
@@ -74,7 +74,7 @@ pub fn spawn(
                         Ok(n) if n > 0 => {
                             let packets = parser.feed(&read_buf[..n]);
                             for pkt in packets {
-                                let _ = evt_tx.send(SerialEvent::Packet(pkt));
+                                let _ = evt_tx.send(SerialEvent::Packet(Box::new(pkt)));
                             }
                             ctx.request_repaint();
                         }

@@ -1,118 +1,13 @@
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::csv_recorder::CsvRecorder;
 use crate::serial::worker::{SerialCommand, SerialEvent};
-use crate::telemetry::packet::{self, Command, FlightState, Telemetry};
+use crate::state::AppState;
+use crate::telemetry::packet::{self, Command, FlightState};
 use crate::ui;
-
-const MAX_DATA_POINTS: usize = 500;
-
-pub struct AppState {
-    pub latest: Option<Telemetry>,
-    pub baro_altitude: VecDeque<f64>,
-    pub gps_altitude: VecDeque<f64>,
-    pub baro_velocity: VecDeque<f64>,
-    pub accel_x: VecDeque<f64>,
-    pub accel_y: VecDeque<f64>,
-    pub accel_z: VecDeque<f64>,
-    pub gyro_x: VecDeque<f64>,
-    pub gyro_y: VecDeque<f64>,
-    pub gyro_z: VecDeque<f64>,
-    pub gps_trail: VecDeque<(f64, f64)>,
-    pub packet_count: u64,
-    pub bytes_received: u64,
-    pub throughput_kbps: f64,
-    pub packets_per_sec: f64,
-    throughput_bytes_window: u64,
-    throughput_packets_window: u64,
-    throughput_last_update: Instant,
-    pub connected: bool,
-    pub available_ports: Vec<String>,
-    pub selected_port: String,
-    pub selected_baud: u32,
-    pub errors: VecDeque<String>,
-    pub ground_pos: Option<(f64, f64)>,
-}
-
-impl AppState {
-    fn new() -> Self {
-        Self {
-            latest: None,
-            baro_altitude: VecDeque::with_capacity(MAX_DATA_POINTS),
-            gps_altitude: VecDeque::with_capacity(MAX_DATA_POINTS),
-            baro_velocity: VecDeque::with_capacity(MAX_DATA_POINTS),
-            accel_x: VecDeque::with_capacity(MAX_DATA_POINTS),
-            accel_y: VecDeque::with_capacity(MAX_DATA_POINTS),
-            accel_z: VecDeque::with_capacity(MAX_DATA_POINTS),
-            gyro_x: VecDeque::with_capacity(MAX_DATA_POINTS),
-            gyro_y: VecDeque::with_capacity(MAX_DATA_POINTS),
-            gyro_z: VecDeque::with_capacity(MAX_DATA_POINTS),
-            gps_trail: VecDeque::with_capacity(MAX_DATA_POINTS),
-            packet_count: 0,
-            bytes_received: 0,
-            throughput_kbps: 0.0,
-            packets_per_sec: 0.0,
-            throughput_bytes_window: 0,
-            throughput_packets_window: 0,
-            throughput_last_update: Instant::now(),
-            connected: false,
-            available_ports: Vec::new(),
-            selected_port: String::new(),
-            selected_baud: 115200,
-            errors: VecDeque::with_capacity(20),
-            ground_pos: None,
-        }
-    }
-
-    fn push_telemetry(&mut self, t: Telemetry) {
-        fn push_bounded(buf: &mut VecDeque<f64>, val: f64) {
-            if buf.len() >= MAX_DATA_POINTS {
-                buf.pop_front();
-            }
-            buf.push_back(val);
-        }
-
-        push_bounded(&mut self.baro_altitude, t.baro_altitude);
-        push_bounded(&mut self.gps_altitude, t.gps_altitude);
-        push_bounded(&mut self.baro_velocity, t.baro_velocity);
-        push_bounded(&mut self.accel_x, t.accel[0]);
-        push_bounded(&mut self.accel_y, t.accel[1]);
-        push_bounded(&mut self.accel_z, t.accel[2]);
-        push_bounded(&mut self.gyro_x, t.gyro[0]);
-        push_bounded(&mut self.gyro_y, t.gyro[1]);
-        push_bounded(&mut self.gyro_z, t.gyro[2]);
-        if t.latitude != 0.0 || t.longitude != 0.0 {
-            if self.gps_trail.len() >= MAX_DATA_POINTS {
-                self.gps_trail.pop_front();
-            }
-            self.gps_trail.push_back((t.latitude, t.longitude));
-        }
-        self.packet_count += 1;
-        self.bytes_received += packet::PACKET_SIZE as u64;
-        self.throughput_bytes_window += packet::PACKET_SIZE as u64;
-        self.throughput_packets_window += 1;
-        let elapsed = self.throughput_last_update.elapsed().as_secs_f64();
-        if elapsed >= 1.0 {
-            self.throughput_kbps = self.throughput_bytes_window as f64 / elapsed;
-            self.packets_per_sec = self.throughput_packets_window as f64 / elapsed;
-            self.throughput_bytes_window = 0;
-            self.throughput_packets_window = 0;
-            self.throughput_last_update = Instant::now();
-        }
-        self.latest = Some(t);
-    }
-
-    fn push_error(&mut self, msg: String) {
-        if self.errors.len() >= 20 {
-            self.errors.pop_front();
-        }
-        self.errors.push_back(msg);
-    }
-}
+use crate::ui::theme::*;
 
 pub struct GroundStationApp {
     state: AppState,
@@ -128,53 +23,12 @@ pub struct GroundStationApp {
 
 impl GroundStationApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut visuals = egui::Visuals::dark();
-        visuals.override_text_color = Some(egui::Color32::from_rgb(180, 180, 180));
-        visuals.panel_fill = egui::Color32::from_rgb(6, 6, 6);
-        visuals.window_fill = egui::Color32::from_rgb(8, 8, 8);
-        visuals.extreme_bg_color = egui::Color32::from_rgb(3, 3, 3);
-        visuals.faint_bg_color = egui::Color32::from_rgb(10, 10, 10);
-        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(14, 14, 14);
-        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 30));
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(20, 20, 20);
-        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.5, egui::Color32::TRANSPARENT);
-        visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 60, 60);
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(140, 140, 140));
-        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(240, 240, 240));
-        visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 80, 80);
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(180, 180, 180));
-        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-        visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
-        visuals.hyperlink_color = egui::Color32::from_rgb(100, 149, 237);
-        visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
-        visuals.selection.bg_fill = egui::Color32::from_rgb(50, 50, 50);
-        cc.egui_ctx.set_visuals(visuals);
-
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "SUSEMono-Regular".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/SUSEMono-Regular.ttf"))),
-        );
-        fonts.font_data.insert(
-            "SUSEMono-SemiBold".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/SUSEMono-SemiBold.ttf"))),
-        );
-        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "SUSEMono-Regular".to_owned());
-        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "SUSEMono-Regular".to_owned());
-        fonts.families.insert(egui::FontFamily::Name("Bold".into()), vec!["SUSEMono-SemiBold".to_owned()]);
-        cc.egui_ctx.set_fonts(fonts);
-
-        let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
-        style.spacing.button_padding = egui::vec2(12.0, 6.0);
-        style.spacing.interact_size.y = 28.0;
-        style.spacing.item_spacing.y = 2.0;
-        cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
+        ui::theme::setup_visuals(cc);
 
         let (cmd_tx, evt_rx) = crate::serial::worker::spawn(cc.egui_ctx.clone());
         let device_pos = Arc::new(Mutex::new(None));
         crate::geolocation::spawn_location_poller(device_pos.clone());
+
         let logo_texture = {
             let png_data = include_bytes!("../assets/logo.png");
             let image = image::load_from_memory(png_data).expect("failed to load logo");
@@ -199,48 +53,6 @@ impl GroundStationApp {
     }
 }
 
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(200, 200, 200);
-const RED_ACCENT: egui::Color32 = egui::Color32::from_rgb(170, 40, 40);
-const GREEN: egui::Color32 = egui::Color32::from_rgb(0, 145, 65);
-const LABEL_COLOR: egui::Color32 = egui::Color32::from_rgb(110, 110, 110);
-const VALUE_COLOR: egui::Color32 = egui::Color32::from_rgb(190, 190, 190);
-const BOX_BG: egui::Color32 = egui::Color32::from_rgb(10, 10, 10);
-const BORDER_SUBTLE: egui::Color32 = egui::Color32::from_rgb(30, 30, 30);
-
-fn bordered_section(ui: &mut egui::Ui, title: &str, title_color: egui::Color32, add_contents: impl FnOnce(&mut egui::Ui)) {
-    let frame = egui::Frame::new()
-        .fill(BOX_BG)
-        .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
-        .corner_radius(3.0)
-        .inner_margin(8.0);
-
-    frame.show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        ui.spacing_mut().interact_size.y = 14.0;
-        ui.colored_label(title_color, egui::RichText::new(title).family(egui::FontFamily::Name("Bold".into())).size(12.0));
-        ui.add_space(1.0);
-        add_contents(ui);
-    });
-}
-
-fn data_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(LABEL_COLOR).size(13.5));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(VALUE_COLOR).family(egui::FontFamily::Name("Bold".into())).size(13.5));
-        });
-    });
-}
-
-fn data_row_colored(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(LABEL_COLOR).size(13.5));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(color).family(egui::FontFamily::Name("Bold".into())).size(13.5));
-        });
-    });
-}
-
 impl eframe::App for GroundStationApp {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Ok(pos) = self.device_pos.try_lock() {
@@ -253,7 +65,7 @@ impl eframe::App for GroundStationApp {
                     if let Some(ref mut rec) = self.csv_recorder {
                         rec.record(&t);
                     }
-                    self.state.push_telemetry(t);
+                    self.state.push_telemetry(*t);
                 }
                 SerialEvent::Connected(name) => {
                     self.state.connected = true;
@@ -591,7 +403,6 @@ impl eframe::App for GroundStationApp {
         // === CENTER: Data grid + Altitude chart ===
         egui::CentralPanel::default().show(root_ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                // Row 1: STATUS | ALTITUDE | VELOCITY | POSITION
                 ui.columns(4, |cols| {
                     bordered_section(&mut cols[0], "STATUS", RED_ACCENT, |ui| {
                         if let Some(ref t) = t {
@@ -633,7 +444,6 @@ impl eframe::App for GroundStationApp {
 
                 ui.add_space(4.0);
 
-                // Row 2: FAULTS | MAGNETOMETER | ACCELERATION | GYROSCOPE
                 ui.columns(4, |cols| {
                     bordered_section(&mut cols[0], "FAULTS", RED_ACCENT, |ui| {
                         if let Some(ref t) = t {
@@ -678,7 +488,6 @@ impl eframe::App for GroundStationApp {
 
                 ui.add_space(8.0);
 
-                // Charts
                 bordered_section(ui, "ALTITUDE", ACCENT, |ui| {
                     ui::charts::altitude_chart(ui, &self.state);
                 });
@@ -698,7 +507,7 @@ impl eframe::App for GroundStationApp {
                 ui.add_space(4.0);
                 bordered_section(ui, "RAW PACKET", ACCENT, |ui| {
                     if let Some(ref t) = t {
-                        hex_viewer(ui, &t.raw);
+                        ui::hex_viewer::hex_viewer(ui, &t.raw);
                     } else {
                         ui.label(egui::RichText::new("NO DATA").color(LABEL_COLOR));
                     }
@@ -706,99 +515,4 @@ impl eframe::App for GroundStationApp {
             });
         });
     }
-}
-
-const HEX_FIELDS: &[(&str, usize, usize, egui::Color32)] = &[
-    ("SYNC",        0,  2,  egui::Color32::from_rgb(255, 255, 255)),
-    ("TICK",        2,  4,  egui::Color32::from_rgb(100, 200, 255)),
-    ("ACCEL X",     6,  4,  egui::Color32::from_rgb(255, 100, 100)),
-    ("ACCEL Y",    10,  4,  egui::Color32::from_rgb(255, 130, 100)),
-    ("ACCEL Z",    14,  4,  egui::Color32::from_rgb(255, 160, 100)),
-    ("GYRO X",     18,  4,  egui::Color32::from_rgb(100, 255, 100)),
-    ("GYRO Y",     22,  4,  egui::Color32::from_rgb(130, 255, 100)),
-    ("GYRO Z",     26,  4,  egui::Color32::from_rgb(160, 255, 100)),
-    ("MAG X",      30,  4,  egui::Color32::from_rgb(200, 100, 255)),
-    ("MAG Y",      34,  4,  egui::Color32::from_rgb(220, 130, 255)),
-    ("MAG Z",      38,  4,  egui::Color32::from_rgb(240, 160, 255)),
-    ("PRESSURE",   42,  4,  egui::Color32::from_rgb(255, 200, 50)),
-    ("TEMP",       46,  4,  egui::Color32::from_rgb(255, 150, 50)),
-    ("LAT",        50,  4,  egui::Color32::from_rgb(50, 200, 200)),
-    ("LON",        54,  4,  egui::Color32::from_rgb(80, 220, 200)),
-    ("GPS ALT",    58,  4,  egui::Color32::from_rgb(110, 240, 200)),
-    ("SATS",       62,  1,  egui::Color32::from_rgb(140, 255, 200)),
-    ("BARO ALT",   63,  4,  egui::Color32::from_rgb(255, 100, 200)),
-    ("BARO VEL",   67,  4,  egui::Color32::from_rgb(255, 130, 220)),
-    ("VEL X",      71,  4,  egui::Color32::from_rgb(200, 200, 100)),
-    ("VEL Y",      75,  4,  egui::Color32::from_rgb(220, 220, 100)),
-    ("VEL Z",      79,  4,  egui::Color32::from_rgb(240, 240, 100)),
-    ("FLAGS",      83,  4,  egui::Color32::from_rgb(255, 80, 80)),
-    ("BATTERY",    87,  4,  egui::Color32::from_rgb(255, 255, 0)),
-    ("STATE",      91,  1,  egui::Color32::from_rgb(0, 200, 255)),
-    ("RELAY",      92,  1,  egui::Color32::from_rgb(255, 165, 0)),
-    ("CMD",        93,  1,  egui::Color32::from_rgb(180, 180, 255)),
-    ("SYNC END",   94,  1,  egui::Color32::from_rgb(255, 255, 255)),
-];
-
-fn byte_color(offset: usize) -> egui::Color32 {
-    for &(_, start, len, color) in HEX_FIELDS {
-        if offset >= start && offset < start + len {
-            return color;
-        }
-    }
-    LABEL_COLOR
-}
-
-fn byte_field(offset: usize) -> &'static str {
-    for &(name, start, len, _) in HEX_FIELDS {
-        if offset >= start && offset < start + len {
-            return name;
-        }
-    }
-    "?"
-}
-
-fn hex_viewer(ui: &mut egui::Ui, raw: &[u8; 95]) {
-    let font = egui::FontId::monospace(12.0);
-    let cols = 16;
-    let rows = (raw.len() + cols - 1) / cols;
-
-    ui.horizontal_top(|ui| {
-        egui::Grid::new("hex_grid")
-            .num_columns(cols + 1)
-            .spacing([2.0, 2.0])
-            .show(ui, |ui| {
-                for row in 0..rows {
-                    ui.label(egui::RichText::new(format!("{:02X}:", row * cols)).font(font.clone()).color(LABEL_COLOR));
-                    for col in 0..cols {
-                        let idx = row * cols + col;
-                        if idx < raw.len() {
-                            let color = byte_color(idx);
-                            let text = format!("{:02X}", raw[idx]);
-                            let label = ui.label(egui::RichText::new(text).font(font.clone()).color(color));
-                            label.on_hover_text(format!("{} [{}]", byte_field(idx), idx));
-                        }
-                    }
-                    ui.end_row();
-                }
-            });
-
-        ui.add_space(16.0);
-
-        let legend_cols = 4;
-        egui::Grid::new("hex_legend")
-            .num_columns(legend_cols)
-            .spacing([12.0, 1.0])
-            .show(ui, |ui| {
-                for (i, &(name, _, _, color)) in HEX_FIELDS.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(egui::RichText::new("\u{25A0}").color(color).font(font.clone()));
-                        ui.label(egui::RichText::new(name).color(LABEL_COLOR).font(font.clone()));
-                    });
-                    if (i + 1) % legend_cols == 0 {
-                        ui.end_row();
-                    }
-                }
-            });
-    });
 }

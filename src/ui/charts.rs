@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use egui_plot::{Line, Plot, PlotPoints};
 
-use crate::app::AppState;
+use crate::state::AppState;
 
 fn telemetry_plot(id: &str) -> Plot<'_> {
     Plot::new(id)

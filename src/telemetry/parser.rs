@@ -1,70 +1,108 @@
 use super::packet::*;
 
-fn read_u16_le(buf: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([buf[offset], buf[offset + 1]])
+struct PacketReader<'a> {
+    buf: &'a [u8],
+    pos: usize,
 }
 
-fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
-}
+impl<'a> PacketReader<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
 
-fn read_i32_le(buf: &[u8], offset: usize) -> i32 {
-    i32::from_le_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
-}
+    fn u8(&mut self) -> u8 {
+        let v = self.buf[self.pos];
+        self.pos += 1;
+        v
+    }
 
-fn scaled(raw: i32) -> f64 {
-    raw as f64 / SCALE
+    fn u16_le(&mut self) -> u16 {
+        let v = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
+        self.pos += 2;
+        v
+    }
+
+    fn u32_le(&mut self) -> u32 {
+        let v = u32::from_le_bytes([
+            self.buf[self.pos],
+            self.buf[self.pos + 1],
+            self.buf[self.pos + 2],
+            self.buf[self.pos + 3],
+        ]);
+        self.pos += 4;
+        v
+    }
+
+    fn i32_le(&mut self) -> i32 {
+        let v = i32::from_le_bytes([
+            self.buf[self.pos],
+            self.buf[self.pos + 1],
+            self.buf[self.pos + 2],
+            self.buf[self.pos + 3],
+        ]);
+        self.pos += 4;
+        v
+    }
+
+    fn scaled(&mut self) -> f64 {
+        self.i32_le() as f64 / SCALE
+    }
+
+    fn gps_scaled(&mut self) -> f64 {
+        self.i32_le() as f64 / GPS_SCALE
+    }
 }
 
 pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
-    let sync = read_u16_le(buf, 0);
+    let mut r = PacketReader::new(buf);
+
+    let sync = r.u16_le();
     if sync != SYNC_WORD {
         return None;
     }
-    if buf[94] != SYNC_END {
+    if buf[PACKET_SIZE - 1] != SYNC_END {
         return None;
     }
 
-    let state_byte = buf[91];
-    let state = FlightState::from_u8(state_byte)?;
-    let last_cmd = Command::from_u8(buf[93]).unwrap_or(Command::None);
+    let tick = r.u32_le();
+    let accel = [r.scaled(), r.scaled(), r.scaled()];
+    let gyro = [r.scaled(), r.scaled(), r.scaled()];
+    let mag = [r.scaled(), r.scaled(), r.scaled()];
+    let pressure_pa = r.scaled();
+    let temperature_c = r.scaled();
+    let latitude = r.gps_scaled();
+    let longitude = r.gps_scaled();
+    let gps_altitude = r.scaled();
+    let satellites = r.u8();
+    let baro_altitude = r.scaled();
+    let baro_velocity = r.scaled();
+    let velocity = [r.scaled(), r.scaled(), r.scaled()];
+    let flags = r.u32_le();
+    let battery_voltage = r.scaled();
+    let state = FlightState::from_u8(r.u8())?;
+    let relay = RelayState::from_u8(r.u8());
+    let last_command = Command::from_u8(r.u8()).unwrap_or(Command::None);
 
     Some(Telemetry {
         raw: *buf,
-        tick: read_u32_le(buf, 2),
-        accel: [
-            scaled(read_i32_le(buf, 6)),
-            scaled(read_i32_le(buf, 10)),
-            scaled(read_i32_le(buf, 14)),
-        ],
-        gyro: [
-            scaled(read_i32_le(buf, 18)),
-            scaled(read_i32_le(buf, 22)),
-            scaled(read_i32_le(buf, 26)),
-        ],
-        mag: [
-            scaled(read_i32_le(buf, 30)),
-            scaled(read_i32_le(buf, 34)),
-            scaled(read_i32_le(buf, 38)),
-        ],
-        pressure_pa: scaled(read_i32_le(buf, 42)),
-        temperature_c: scaled(read_i32_le(buf, 46)),
-        latitude: read_i32_le(buf, 50) as f64 / GPS_SCALE,
-        longitude: read_i32_le(buf, 54) as f64 / GPS_SCALE,
-        gps_altitude: scaled(read_i32_le(buf, 58)),
-        satellites: buf[62],
-        baro_altitude: scaled(read_i32_le(buf, 63)),
-        baro_velocity: scaled(read_i32_le(buf, 67)),
-        velocity: [
-            scaled(read_i32_le(buf, 71)),
-            scaled(read_i32_le(buf, 75)),
-            scaled(read_i32_le(buf, 79)),
-        ],
-        flags: read_u32_le(buf, 83),
-        battery_voltage: scaled(read_i32_le(buf, 87)),
+        tick,
+        accel,
+        gyro,
+        mag,
+        pressure_pa,
+        temperature_c,
+        latitude,
+        longitude,
+        gps_altitude,
+        satellites,
+        baro_altitude,
+        baro_velocity,
+        velocity,
+        flags,
+        battery_voltage,
         state,
-        relay: RelayState::from_u8(buf[92]),
-        last_command: last_cmd,
+        relay,
+        last_command,
     })
 }
 
@@ -96,7 +134,7 @@ impl StreamParser {
             }
 
             let frame: [u8; PACKET_SIZE] = self.buf[..PACKET_SIZE].try_into().unwrap();
-            if frame[94] == SYNC_END {
+            if frame[PACKET_SIZE - 1] == SYNC_END {
                 if let Some(telem) = parse_packet(&frame) {
                     packets.push(telem);
                 }
@@ -123,18 +161,13 @@ mod tests {
         let mut buf = [0u8; PACKET_SIZE];
         buf[0] = 0xFE;
         buf[1] = 0xCA;
-        // tick = 1000
         buf[2..6].copy_from_slice(&1000u32.to_le_bytes());
         // accel_x = 9.81 * 100 = 981
         buf[6..10].copy_from_slice(&981i32.to_le_bytes());
-        // state = IDLE
         buf[91] = 0;
-        // relay = 0
         buf[92] = 0;
-        // last_command = NONE
         buf[93] = 0;
-        // footer
-        buf[94] = 0xBE;
+        buf[PACKET_SIZE - 1] = SYNC_END;
         buf
     }
 
@@ -157,7 +190,7 @@ mod tests {
     #[test]
     fn reject_bad_footer() {
         let mut buf = make_test_packet();
-        buf[94] = 0x00;
+        buf[PACKET_SIZE - 1] = 0x00;
         assert!(parse_packet(&buf).is_none());
     }
 
@@ -165,11 +198,10 @@ mod tests {
     fn stream_parser_resync() {
         let mut parser = StreamParser::new();
         let pkt = make_test_packet();
-        let mut data = vec![0xAA, 0xBB, 0xCC]; // garbage
+        let mut data = vec![0xAA, 0xBB, 0xCC];
         data.extend_from_slice(&pkt);
         let results = parser.feed(&data);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].tick, 1000);
         assert_eq!(results[0].tick, 1000);
     }
 }

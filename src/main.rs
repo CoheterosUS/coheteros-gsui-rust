@@ -4,6 +4,7 @@ mod app;
 mod csv_recorder;
 mod geolocation;
 mod serial;
+mod state;
 mod telemetry;
 mod ui;
 
