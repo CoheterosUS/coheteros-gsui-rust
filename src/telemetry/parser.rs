@@ -30,6 +30,7 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
     let last_cmd = Command::from_u8(buf[93]).unwrap_or(Command::None);
 
     Some(Telemetry {
+        raw: *buf,
         tick: read_u32_le(buf, 2),
         accel: [
             scaled(read_i32_le(buf, 6)),

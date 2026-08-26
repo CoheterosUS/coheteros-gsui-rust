@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod csv_recorder;
 mod geolocation;
 mod serial;
 mod telemetry;

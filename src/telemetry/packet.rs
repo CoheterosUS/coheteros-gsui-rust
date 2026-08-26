@@ -150,6 +150,7 @@ pub fn build_command_frame(cmd: Command) -> [u8; 5] {
 
 #[derive(Debug, Clone)]
 pub struct Telemetry {
+    pub raw: [u8; PACKET_SIZE],
     pub tick: u32,
     pub accel: [f64; 3],
     pub gyro: [f64; 3],

@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::csv_recorder::CsvRecorder;
 use crate::serial::worker::{SerialCommand, SerialEvent};
 use crate::telemetry::packet::{self, Command, FlightState, Telemetry};
 use crate::ui;
@@ -25,7 +26,9 @@ pub struct AppState {
     pub packet_count: u64,
     pub bytes_received: u64,
     pub throughput_kbps: f64,
+    pub packets_per_sec: f64,
     throughput_bytes_window: u64,
+    throughput_packets_window: u64,
     throughput_last_update: Instant,
     pub connected: bool,
     pub available_ports: Vec<String>,
@@ -52,7 +55,9 @@ impl AppState {
             packet_count: 0,
             bytes_received: 0,
             throughput_kbps: 0.0,
+            packets_per_sec: 0.0,
             throughput_bytes_window: 0,
+            throughput_packets_window: 0,
             throughput_last_update: Instant::now(),
             connected: false,
             available_ports: Vec::new(),
@@ -89,10 +94,13 @@ impl AppState {
         self.packet_count += 1;
         self.bytes_received += packet::PACKET_SIZE as u64;
         self.throughput_bytes_window += packet::PACKET_SIZE as u64;
+        self.throughput_packets_window += 1;
         let elapsed = self.throughput_last_update.elapsed().as_secs_f64();
         if elapsed >= 1.0 {
             self.throughput_kbps = self.throughput_bytes_window as f64 / elapsed;
+            self.packets_per_sec = self.throughput_packets_window as f64 / elapsed;
             self.throughput_bytes_window = 0;
+            self.throughput_packets_window = 0;
             self.throughput_last_update = Instant::now();
         }
         self.latest = Some(t);
@@ -113,6 +121,9 @@ pub struct GroundStationApp {
     map_state: ui::map::MapState,
     pending_command: Option<Command>,
     device_pos: Arc<Mutex<Option<(f64, f64)>>>,
+    show_about: bool,
+    csv_recorder: Option<CsvRecorder>,
+    logo_texture: Option<egui::TextureHandle>,
 }
 
 impl GroundStationApp {
@@ -128,12 +139,15 @@ impl GroundStationApp {
         visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(20, 20, 20);
         visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.5, egui::Color32::TRANSPARENT);
         visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(45, 45, 45);
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 100, 100));
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 60, 60);
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(140, 140, 140));
+        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(240, 240, 240));
         visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(55, 55, 55);
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 120, 120));
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(80, 80, 80);
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(180, 180, 180));
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
         visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
+        visuals.hyperlink_color = egui::Color32::from_rgb(100, 149, 237);
         visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
         visuals.selection.bg_fill = egui::Color32::from_rgb(50, 50, 50);
         cc.egui_ctx.set_visuals(visuals);
@@ -161,6 +175,16 @@ impl GroundStationApp {
         let (cmd_tx, evt_rx) = crate::serial::worker::spawn(cc.egui_ctx.clone());
         let device_pos = Arc::new(Mutex::new(None));
         crate::geolocation::spawn_location_poller(device_pos.clone());
+        let logo_texture = {
+            let png_data = include_bytes!("../assets/logo.png");
+            let image = image::load_from_memory(png_data).expect("failed to load logo");
+            let rgba = image.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            let pixels = rgba.into_raw();
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+            Some(cc.egui_ctx.load_texture("logo", color_image, egui::TextureOptions::LINEAR))
+        };
+
         Self {
             state: AppState::new(),
             cmd_tx,
@@ -168,6 +192,9 @@ impl GroundStationApp {
             map_state: ui::map::MapState::new(&cc.egui_ctx),
             pending_command: None,
             device_pos,
+            show_about: false,
+            csv_recorder: None,
+            logo_texture,
         }
     }
 }
@@ -222,7 +249,12 @@ impl eframe::App for GroundStationApp {
 
         while let Ok(evt) = self.evt_rx.try_recv() {
             match evt {
-                SerialEvent::Packet(t) => self.state.push_telemetry(t),
+                SerialEvent::Packet(t) => {
+                    if let Some(ref mut rec) = self.csv_recorder {
+                        rec.record(&t);
+                    }
+                    self.state.push_telemetry(t);
+                }
                 SerialEvent::Connected(name) => {
                     self.state.connected = true;
                     self.state.push_error(format!("Connected to {}", name));
@@ -241,6 +273,33 @@ impl eframe::App for GroundStationApp {
         }
 
         let t = self.state.latest.clone();
+
+        // === ABOUT WINDOW ===
+        egui::Window::new("About")
+            .open(&mut self.show_about)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(14, 14, 14)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 50))).inner_margin(40.0).corner_radius(4.0))
+            .show(root_ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| {
+                    if let Some(ref tex) = self.logo_texture {
+                        let logo_size = egui::vec2(100.0, 100.0);
+                        ui.image(egui::load::SizedTexture::new(tex.id(), logo_size));
+                        ui.add_space(12.0);
+                    }
+                    ui.label(egui::RichText::new("COHETEROS GROUND STATION").family(egui::FontFamily::Name("Bold".into())).size(22.0).color(ACCENT));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(15.0).color(LABEL_COLOR));
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new("BUILT BY THE COHETEROS TEAM\nFOR THE EUROPEAN ROCKETRY CHALLENGE").size(14.0).color(VALUE_COLOR));
+                    ui.add_space(16.0);
+                    let link_color = egui::Color32::from_rgb(100, 149, 237);
+                    ui.hyperlink_to(egui::RichText::new("coheteros.com").size(14.0).color(link_color), "https://coheteros.com");
+                    ui.hyperlink_to(egui::RichText::new("LinkedIn").size(14.0).color(link_color), "https://www.linkedin.com/company/coheteros-us/");
+                    ui.hyperlink_to(egui::RichText::new("GitHub").size(14.0).color(link_color), "https://github.com/CoheterosUS");
+                });
+            });
 
         // === TOP BAR: State + key values ===
         egui::Panel::top("top_bar")
@@ -273,13 +332,18 @@ impl eframe::App for GroundStationApp {
                     if ui.button("DISCONNECT").clicked() {
                         let _ = self.cmd_tx.send(SerialCommand::Disconnect);
                     }
-                } else if !self.state.selected_port.is_empty() {
-                    if ui.button("CONNECT").clicked() {
+                } else {
+                    let enabled = !self.state.selected_port.is_empty();
+                    if ui.add_enabled(enabled, egui::Button::new("CONNECT")).clicked() {
                         let _ = self.cmd_tx.send(SerialCommand::Connect {
                             port: self.state.selected_port.clone(),
                             baud: self.state.selected_baud,
                         });
                     }
+                }
+
+                if ui.button("ABOUT").clicked() {
+                    self.show_about = !self.show_about;
                 }
 
                 if let Some(ref t) = t {
@@ -334,6 +398,29 @@ impl eframe::App for GroundStationApp {
                 });
 
                 ui.add_space(12.0);
+                ui.label("CSV");
+                ui.add_space(12.0);
+
+                if self.csv_recorder.is_some() {
+                    if ui.add(egui::Button::new(
+                        egui::RichText::new("STOP REC").color(egui::Color32::WHITE),
+                    ).fill(egui::Color32::from_rgb(220, 40, 40))).clicked() {
+                        self.csv_recorder = None;
+                        self.state.push_error("Recording stopped".into());
+                    }
+                } else if ui.add(egui::Button::new(
+                    egui::RichText::new("RECORD").color(egui::Color32::WHITE),
+                ).fill(GREEN)).clicked() {
+                    match CsvRecorder::new() {
+                        Ok(rec) => {
+                            self.state.push_error("Recording started".into());
+                            self.csv_recorder = Some(rec);
+                        }
+                        Err(e) => self.state.push_error(format!("CSV error: {}", e)),
+                    }
+                }
+
+                ui.add_space(12.0);
 
                 if let Some(ref t) = t {
                     let state_color = match t.state {
@@ -362,16 +449,17 @@ impl eframe::App for GroundStationApp {
 
         // === COMMAND CONFIRMATION ===
         if let Some(cmd) = self.pending_command {
-            let modal = egui::Modal::new(egui::Id::new("cmd_confirm"));
+            let modal = egui::Modal::new(egui::Id::new("cmd_confirm"))
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(14, 14, 14)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 50))).inner_margin(30.0).corner_radius(4.0));
             let response = modal.show(root_ui.ctx(), |ui| {
-                ui.label(format!("Send {}?", cmd));
-                ui.add_space(8.0);
+                ui.label(egui::RichText::new(format!("Send {}?", cmd)).size(18.0).family(egui::FontFamily::Name("Bold".into())));
+                ui.add_space(16.0);
                 ui.horizontal(|ui| {
-                    if ui.button("CONFIRM").clicked() {
+                    if ui.button(egui::RichText::new("CONFIRM").size(15.0)).clicked() {
                         let _ = self.cmd_tx.send(SerialCommand::SendCommand(cmd));
                         self.pending_command = None;
                     }
-                    if ui.button("CANCEL").clicked() {
+                    if ui.button(egui::RichText::new("CANCEL").size(15.0)).clicked() {
                         self.pending_command = None;
                     }
                 });
@@ -394,6 +482,8 @@ impl eframe::App for GroundStationApp {
                 ui.label(format!("PACKETS: {}", self.state.packet_count));
                 ui.separator();
                 ui.label(format!("{:.0} B/s", self.state.throughput_kbps));
+                ui.separator();
+                ui.label(format!("{:.1} PACKETS/s", self.state.packets_per_sec));
             });
         });
 
@@ -604,7 +694,111 @@ impl eframe::App for GroundStationApp {
                 bordered_section(ui, "VELOCITY", ACCENT, |ui| {
                     ui::charts::velocity_chart(ui, &self.state);
                 });
+
+                ui.add_space(4.0);
+                bordered_section(ui, "RAW PACKET", ACCENT, |ui| {
+                    if let Some(ref t) = t {
+                        hex_viewer(ui, &t.raw);
+                    } else {
+                        ui.label(egui::RichText::new("NO DATA").color(LABEL_COLOR));
+                    }
+                });
             });
         });
     }
+}
+
+const HEX_FIELDS: &[(&str, usize, usize, egui::Color32)] = &[
+    ("SYNC",        0,  2,  egui::Color32::from_rgb(255, 255, 255)),
+    ("TICK",        2,  4,  egui::Color32::from_rgb(100, 200, 255)),
+    ("ACCEL X",     6,  4,  egui::Color32::from_rgb(255, 100, 100)),
+    ("ACCEL Y",    10,  4,  egui::Color32::from_rgb(255, 130, 100)),
+    ("ACCEL Z",    14,  4,  egui::Color32::from_rgb(255, 160, 100)),
+    ("GYRO X",     18,  4,  egui::Color32::from_rgb(100, 255, 100)),
+    ("GYRO Y",     22,  4,  egui::Color32::from_rgb(130, 255, 100)),
+    ("GYRO Z",     26,  4,  egui::Color32::from_rgb(160, 255, 100)),
+    ("MAG X",      30,  4,  egui::Color32::from_rgb(200, 100, 255)),
+    ("MAG Y",      34,  4,  egui::Color32::from_rgb(220, 130, 255)),
+    ("MAG Z",      38,  4,  egui::Color32::from_rgb(240, 160, 255)),
+    ("PRESSURE",   42,  4,  egui::Color32::from_rgb(255, 200, 50)),
+    ("TEMP",       46,  4,  egui::Color32::from_rgb(255, 150, 50)),
+    ("LAT",        50,  4,  egui::Color32::from_rgb(50, 200, 200)),
+    ("LON",        54,  4,  egui::Color32::from_rgb(80, 220, 200)),
+    ("GPS ALT",    58,  4,  egui::Color32::from_rgb(110, 240, 200)),
+    ("SATS",       62,  1,  egui::Color32::from_rgb(140, 255, 200)),
+    ("BARO ALT",   63,  4,  egui::Color32::from_rgb(255, 100, 200)),
+    ("BARO VEL",   67,  4,  egui::Color32::from_rgb(255, 130, 220)),
+    ("VEL X",      71,  4,  egui::Color32::from_rgb(200, 200, 100)),
+    ("VEL Y",      75,  4,  egui::Color32::from_rgb(220, 220, 100)),
+    ("VEL Z",      79,  4,  egui::Color32::from_rgb(240, 240, 100)),
+    ("FLAGS",      83,  4,  egui::Color32::from_rgb(255, 80, 80)),
+    ("BATTERY",    87,  4,  egui::Color32::from_rgb(255, 255, 0)),
+    ("STATE",      91,  1,  egui::Color32::from_rgb(0, 200, 255)),
+    ("RELAY",      92,  1,  egui::Color32::from_rgb(255, 165, 0)),
+    ("CMD",        93,  1,  egui::Color32::from_rgb(180, 180, 255)),
+    ("SYNC END",   94,  1,  egui::Color32::from_rgb(255, 255, 255)),
+];
+
+fn byte_color(offset: usize) -> egui::Color32 {
+    for &(_, start, len, color) in HEX_FIELDS {
+        if offset >= start && offset < start + len {
+            return color;
+        }
+    }
+    LABEL_COLOR
+}
+
+fn byte_field(offset: usize) -> &'static str {
+    for &(name, start, len, _) in HEX_FIELDS {
+        if offset >= start && offset < start + len {
+            return name;
+        }
+    }
+    "?"
+}
+
+fn hex_viewer(ui: &mut egui::Ui, raw: &[u8; 95]) {
+    let font = egui::FontId::monospace(12.0);
+    let cols = 16;
+    let rows = (raw.len() + cols - 1) / cols;
+
+    ui.horizontal_top(|ui| {
+        egui::Grid::new("hex_grid")
+            .num_columns(cols + 1)
+            .spacing([2.0, 2.0])
+            .show(ui, |ui| {
+                for row in 0..rows {
+                    ui.label(egui::RichText::new(format!("{:02X}:", row * cols)).font(font.clone()).color(LABEL_COLOR));
+                    for col in 0..cols {
+                        let idx = row * cols + col;
+                        if idx < raw.len() {
+                            let color = byte_color(idx);
+                            let text = format!("{:02X}", raw[idx]);
+                            let label = ui.label(egui::RichText::new(text).font(font.clone()).color(color));
+                            label.on_hover_text(format!("{} [{}]", byte_field(idx), idx));
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+
+        ui.add_space(16.0);
+
+        let legend_cols = 4;
+        egui::Grid::new("hex_legend")
+            .num_columns(legend_cols)
+            .spacing([12.0, 1.0])
+            .show(ui, |ui| {
+                for (i, &(name, _, _, color)) in HEX_FIELDS.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.label(egui::RichText::new("\u{25A0}").color(color).font(font.clone()));
+                        ui.label(egui::RichText::new(name).color(LABEL_COLOR).font(font.clone()));
+                    });
+                    if (i + 1) % legend_cols == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+    });
 }
