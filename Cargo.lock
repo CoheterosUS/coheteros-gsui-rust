@@ -701,6 +701,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "coheteros-ground-station"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "csv",
+ "eframe",
+ "egui",
+ "egui_plot",
+ "image",
+ "serialport",
+ "walkers",
+ "windows 0.61.3",
+ "winres",
+]
+
+[[package]]
 name = "color"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1005,22 +1021,6 @@ dependencies = [
  "smallvec",
  "unicode-segmentation",
  "web-sys",
-]
-
-[[package]]
-name = "egui-coheteros"
-version = "0.1.0"
-dependencies = [
- "crossbeam-channel",
- "csv",
- "eframe",
- "egui",
- "egui_plot",
- "image",
- "serialport",
- "walkers",
- "windows 0.61.3",
- "winres",
 ]
 
 [[package]]
