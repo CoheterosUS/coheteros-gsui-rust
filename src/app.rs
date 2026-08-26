@@ -138,6 +138,20 @@ impl GroundStationApp {
         visuals.selection.bg_fill = egui::Color32::from_rgb(50, 50, 50);
         cc.egui_ctx.set_visuals(visuals);
 
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "SUSEMono-Regular".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/SUSEMono-Regular.ttf"))),
+        );
+        fonts.font_data.insert(
+            "SUSEMono-SemiBold".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/SUSEMono-SemiBold.ttf"))),
+        );
+        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "SUSEMono-Regular".to_owned());
+        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "SUSEMono-Regular".to_owned());
+        fonts.families.insert(egui::FontFamily::Name("Bold".into()), vec!["SUSEMono-SemiBold".to_owned()]);
+        cc.egui_ctx.set_fonts(fonts);
+
         let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
         style.spacing.interact_size.y = 28.0;
@@ -176,7 +190,7 @@ fn bordered_section(ui: &mut egui::Ui, title: &str, title_color: egui::Color32, 
     frame.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.spacing_mut().interact_size.y = 14.0;
-        ui.colored_label(title_color, egui::RichText::new(title).strong().size(12.0));
+        ui.colored_label(title_color, egui::RichText::new(title).family(egui::FontFamily::Name("Bold".into())).size(12.0));
         ui.add_space(1.0);
         add_contents(ui);
     });
@@ -186,7 +200,7 @@ fn data_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).color(LABEL_COLOR).size(13.5));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(VALUE_COLOR).strong().size(13.5));
+            ui.label(egui::RichText::new(value).color(VALUE_COLOR).family(egui::FontFamily::Name("Bold".into())).size(13.5));
         });
     });
 }
@@ -195,7 +209,7 @@ fn data_row_colored(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Co
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).color(LABEL_COLOR).size(13.5));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(color).strong().size(13.5));
+            ui.label(egui::RichText::new(value).color(color).family(egui::FontFamily::Name("Bold".into())).size(13.5));
         });
     });
 }
@@ -270,13 +284,13 @@ impl eframe::App for GroundStationApp {
 
                 if let Some(ref t) = t {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("{:.2} \u{00b0}C", t.temperature_c)).strong().color(egui::Color32::from_rgb(230, 70, 70))); ui.label("TEMP");
+                        ui.label(egui::RichText::new(format!("{:.2} \u{00b0}C", t.temperature_c)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::from_rgb(230, 70, 70))); ui.label("TEMP");
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).strong()); ui.label("PRESSURE");
+                        ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).family(egui::FontFamily::Name("Bold".into()))); ui.label("PRESSURE");
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).strong().color(egui::Color32::YELLOW)); ui.label("BATTERY");
+                        ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::YELLOW)); ui.label("BATTERY");
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{}", t.tick)).strong()); ui.label("TICK");
+                        ui.label(egui::RichText::new(format!("{}", t.tick)).family(egui::FontFamily::Name("Bold".into()))); ui.label("TICK");
                     });
                 }
             });
@@ -331,7 +345,7 @@ impl eframe::App for GroundStationApp {
                     };
                     let badge = egui::RichText::new(format!(" {} ", t.state))
                         .color(egui::Color32::BLACK)
-                        .strong();
+                        .family(egui::FontFamily::Name("Bold".into()));
                     ui.colored_label(state_color, badge);
 
                     let faults = packet::active_faults(t.flags);
@@ -419,8 +433,8 @@ impl eframe::App for GroundStationApp {
                         let x_value = overlay_rect.left() + 44.0;
                         let line_h = 18.0;
 
-                        let font = egui::FontId::proportional(s);
-                        let bold = egui::FontId::proportional(s + 1.0);
+                        let font = egui::FontId::monospace(s);
+                        let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
 
                         let rows: &[(&str, String, egui::Color32)] = &[
                             ("LAT", format!("{:.6}\u{00b0}", t.latitude), VALUE_COLOR),
