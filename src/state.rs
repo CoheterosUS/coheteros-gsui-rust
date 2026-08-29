@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::telemetry::packet::{self, Telemetry};
+use crate::telemetry::packet::{self, FlightState, Telemetry};
 
 pub const MAX_DATA_POINTS: usize = 500;
+const MAX_CONSOLE_ENTRIES: usize = 1000;
 
 pub struct AppState {
     pub latest: Option<Telemetry>,
@@ -28,8 +29,27 @@ pub struct AppState {
     pub available_ports: Vec<String>,
     pub selected_port: String,
     pub selected_baud: u32,
-    pub errors: VecDeque<String>,
     pub ground_pos: Option<(f64, f64)>,
+    pub expected_packet_rate: u32,
+    pub dark_mode: bool,
+    pub max_baro_altitude: f64,
+    pub max_gps_altitude: f64,
+    pub max_baro_velocity: f64,
+    pub max_accel_magnitude: f64,
+    pub max_temperature: f64,
+    pub min_temperature: f64,
+    pub min_battery_voltage: f64,
+    pub max_battery_voltage: f64,
+    pub extremes_initialized: bool,
+    pub console: VecDeque<ConsoleEntry>,
+    last_flight_state: Option<FlightState>,
+    session_start: Instant,
+}
+
+pub enum ConsoleEntry {
+    StateChange { state: FlightState, elapsed_secs: f64 },
+    CommandSent { command: String, elapsed_secs: f64 },
+    Message { text: String, elapsed_secs: f64 },
 }
 
 impl AppState {
@@ -57,8 +77,21 @@ impl AppState {
             available_ports: Vec::new(),
             selected_port: String::new(),
             selected_baud: 115200,
-            errors: VecDeque::with_capacity(20),
             ground_pos: None,
+            expected_packet_rate: 10,
+            dark_mode: true,
+            max_baro_altitude: f64::NEG_INFINITY,
+            max_gps_altitude: f64::NEG_INFINITY,
+            max_baro_velocity: f64::NEG_INFINITY,
+            max_accel_magnitude: 0.0,
+            max_temperature: f64::NEG_INFINITY,
+            min_temperature: f64::INFINITY,
+            min_battery_voltage: f64::INFINITY,
+            max_battery_voltage: f64::NEG_INFINITY,
+            extremes_initialized: false,
+            console: VecDeque::with_capacity(MAX_CONSOLE_ENTRIES),
+            last_flight_state: None,
+            session_start: Instant::now(),
         }
     }
 
@@ -97,13 +130,58 @@ impl AppState {
             self.throughput_packets_window = 0;
             self.throughput_last_update = Instant::now();
         }
+        let accel_mag = (t.accel[0] * t.accel[0] + t.accel[1] * t.accel[1] + t.accel[2] * t.accel[2]).sqrt();
+        if !self.extremes_initialized {
+            self.max_baro_altitude = t.baro_altitude;
+            self.max_gps_altitude = t.gps_altitude;
+            self.max_baro_velocity = t.baro_velocity;
+            self.max_accel_magnitude = accel_mag;
+            self.max_temperature = t.temperature_c;
+            self.min_temperature = t.temperature_c;
+            self.min_battery_voltage = t.battery_voltage;
+            self.max_battery_voltage = t.battery_voltage;
+            self.extremes_initialized = true;
+        } else {
+            self.max_baro_altitude = self.max_baro_altitude.max(t.baro_altitude);
+            self.max_gps_altitude = self.max_gps_altitude.max(t.gps_altitude);
+            self.max_baro_velocity = self.max_baro_velocity.max(t.baro_velocity);
+            self.max_accel_magnitude = self.max_accel_magnitude.max(accel_mag);
+            self.max_temperature = self.max_temperature.max(t.temperature_c);
+            self.min_temperature = self.min_temperature.min(t.temperature_c);
+            self.min_battery_voltage = self.min_battery_voltage.min(t.battery_voltage);
+            self.max_battery_voltage = self.max_battery_voltage.max(t.battery_voltage);
+        }
+
+        let state_changed = self.last_flight_state.map_or(true, |s| s != t.state);
+        if state_changed {
+            self.push_console(ConsoleEntry::StateChange {
+                state: t.state,
+                elapsed_secs: self.session_start.elapsed().as_secs_f64(),
+            });
+            self.last_flight_state = Some(t.state);
+        }
+
         self.latest = Some(t);
     }
 
-    pub fn push_error(&mut self, msg: String) {
-        if self.errors.len() >= 20 {
-            self.errors.pop_front();
+    fn push_console(&mut self, entry: ConsoleEntry) {
+        if self.console.len() >= MAX_CONSOLE_ENTRIES {
+            self.console.pop_front();
         }
-        self.errors.push_back(msg);
+        self.console.push_back(entry);
+    }
+
+    pub fn push_message(&mut self, text: &str) {
+        self.push_console(ConsoleEntry::Message {
+            text: text.to_uppercase(),
+            elapsed_secs: self.session_start.elapsed().as_secs_f64(),
+        });
+    }
+
+    pub fn push_command(&mut self, cmd: &str) {
+        self.push_console(ConsoleEntry::CommandSent {
+            command: cmd.to_string(),
+            elapsed_secs: self.session_start.elapsed().as_secs_f64(),
+        });
     }
 }

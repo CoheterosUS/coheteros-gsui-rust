@@ -7,7 +7,7 @@ use crate::serial::worker::{SerialCommand, SerialEvent};
 use crate::state::AppState;
 use crate::telemetry::packet::{self, Command, FlightState};
 use crate::ui;
-use crate::ui::theme::*;
+use crate::ui::theme;
 
 pub struct GroundStationApp {
     state: AppState,
@@ -23,7 +23,8 @@ pub struct GroundStationApp {
 
 impl GroundStationApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        ui::theme::setup_visuals(cc);
+        theme::setup_fonts_and_style(cc);
+        theme::apply_visuals(&cc.egui_ctx, true);
 
         let (cmd_tx, evt_rx) = crate::serial::worker::spawn(cc.egui_ctx.clone());
         let device_pos = Arc::new(Mutex::new(None));
@@ -55,6 +56,9 @@ impl GroundStationApp {
 
 impl eframe::App for GroundStationApp {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let dm = self.state.dark_mode;
+        let tc = theme::current_theme(dm);
+
         if let Ok(pos) = self.device_pos.try_lock() {
             self.state.ground_pos = *pos;
         }
@@ -69,14 +73,14 @@ impl eframe::App for GroundStationApp {
                 }
                 SerialEvent::Connected(name) => {
                     self.state.connected = true;
-                    self.state.push_error(format!("Connected to {}", name));
+                    self.state.push_message(&format!("Connected to {}", name));
                 }
                 SerialEvent::Disconnected => {
                     self.state.connected = false;
-                    self.state.push_error("Disconnected".into());
+                    self.state.push_message("Disconnected");
                 }
                 SerialEvent::Error(e) => {
-                    self.state.push_error(e);
+                    self.state.push_message(&e);
                 }
                 SerialEvent::PortList(ports) => {
                     self.state.available_ports = ports;
@@ -92,7 +96,7 @@ impl eframe::App for GroundStationApp {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(14, 14, 14)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 50))).inner_margin(40.0).corner_radius(4.0))
+            .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(40.0).corner_radius(4.0))
             .show(root_ui.ctx(), |ui| {
                 ui.vertical_centered(|ui| {
                     if let Some(ref tex) = self.logo_texture {
@@ -100,11 +104,11 @@ impl eframe::App for GroundStationApp {
                         ui.image(egui::load::SizedTexture::new(tex.id(), logo_size));
                         ui.add_space(12.0);
                     }
-                    ui.label(egui::RichText::new("COHETEROS GROUND STATION").family(egui::FontFamily::Name("Bold".into())).size(22.0).color(ACCENT));
+                    ui.label(egui::RichText::new("COHETEROS GROUND STATION").family(egui::FontFamily::Name("Bold".into())).size(22.0).color(tc.accent));
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(15.0).color(LABEL_COLOR));
+                    ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(15.0).color(tc.label_color));
                     ui.add_space(16.0);
-                    ui.label(egui::RichText::new("BUILT BY THE COHETEROS TEAM\nFOR THE EUROPEAN ROCKETRY CHALLENGE").size(14.0).color(VALUE_COLOR));
+                    ui.label(egui::RichText::new("BUILT BY THE COHETEROS TEAM\nFOR THE EUROPEAN ROCKETRY CHALLENGE").size(14.0).color(tc.value_color));
                     ui.add_space(16.0);
                     let link_color = egui::Color32::from_rgb(100, 149, 237);
                     ui.hyperlink_to(egui::RichText::new("coheteros.com").size(14.0).color(link_color), "https://coheteros.com");
@@ -115,7 +119,7 @@ impl eframe::App for GroundStationApp {
 
         // === TOP BAR: State + key values ===
         egui::Panel::top("top_bar")
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(6, 6, 6)).inner_margin(egui::Margin::symmetric(8, 6)))
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
             .show(root_ui, |ui| {
             ui.horizontal_centered(|ui| {
                 egui::ComboBox::from_id_salt("port_combo")
@@ -158,13 +162,30 @@ impl eframe::App for GroundStationApp {
                     self.show_about = !self.show_about;
                 }
 
+                let theme_label = if self.state.dark_mode { "LIGHT" } else { "DARK" };
+                if ui.button(theme_label).clicked() {
+                    self.state.dark_mode = !self.state.dark_mode;
+                    theme::apply_visuals(ui.ctx(), self.state.dark_mode);
+                }
+
+                ui.separator();
+                ui.label("EXPECTED Hz");
+                egui::ComboBox::from_id_salt("expected_rate")
+                    .selected_text(format!("{}", self.state.expected_packet_rate))
+                    .width(50.0)
+                    .show_ui(ui, |ui| {
+                        for &rate in &[10, 20, 25, 50, 100, 200] {
+                            ui.selectable_value(&mut self.state.expected_packet_rate, rate, format!("{}", rate));
+                        }
+                    });
+
                 if let Some(ref t) = t {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new(format!("{:.2} \u{00b0}C", t.temperature_c)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::from_rgb(230, 70, 70))); ui.label("TEMP");
                         ui.add_space(12.0);
                         ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).family(egui::FontFamily::Name("Bold".into()))); ui.label("PRESSURE");
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::YELLOW)); ui.label("BATTERY");
+                        ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(tc.yellow)); ui.label("BATTERY");
                         ui.add_space(12.0);
                         ui.label(egui::RichText::new(format!("{}", t.tick)).family(egui::FontFamily::Name("Bold".into()))); ui.label("TICK");
                     });
@@ -174,7 +195,7 @@ impl eframe::App for GroundStationApp {
 
         // === COMMAND BAR ===
         egui::Panel::top("cmd_bar")
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(6, 6, 6)).inner_margin(egui::Margin::symmetric(8, 6)))
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
             .show(root_ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label("FLIGHT COMMANDS");
@@ -218,17 +239,17 @@ impl eframe::App for GroundStationApp {
                         egui::RichText::new("STOP REC").color(egui::Color32::WHITE),
                     ).fill(egui::Color32::from_rgb(220, 40, 40))).clicked() {
                         self.csv_recorder = None;
-                        self.state.push_error("Recording stopped".into());
+                        self.state.push_message("Recording stopped");
                     }
                 } else if ui.add(egui::Button::new(
                     egui::RichText::new("RECORD").color(egui::Color32::WHITE),
-                ).fill(GREEN)).clicked() {
+                ).fill(tc.green)).clicked() {
                     match CsvRecorder::new() {
                         Ok(rec) => {
-                            self.state.push_error("Recording started".into());
+                            self.state.push_message("Recording started");
                             self.csv_recorder = Some(rec);
                         }
-                        Err(e) => self.state.push_error(format!("CSV error: {}", e)),
+                        Err(e) => self.state.push_message(&format!("CSV error: {}", e)),
                     }
                 }
 
@@ -238,9 +259,9 @@ impl eframe::App for GroundStationApp {
                     let state_color = match t.state {
                         FlightState::Idle => egui::Color32::GRAY,
                         FlightState::Burn => egui::Color32::ORANGE,
-                        FlightState::Apogee | FlightState::Parachute => GREEN,
-                        FlightState::GroundAbort | FlightState::DescentAbort => RED_ACCENT,
-                        _ => egui::Color32::YELLOW,
+                        FlightState::Apogee | FlightState::Parachute => tc.green,
+                        FlightState::GroundAbort | FlightState::DescentAbort => tc.red_accent,
+                        _ => tc.yellow,
                     };
                     let badge = egui::RichText::new(format!(" {} ", t.state))
                         .color(egui::Color32::BLACK)
@@ -251,7 +272,7 @@ impl eframe::App for GroundStationApp {
                     if faults.is_empty() {
                         ui.label("FAULTS: NONE");
                     } else {
-                        ui.colored_label(RED_ACCENT, format!("FAULTS: {}", faults.len()));
+                        ui.colored_label(tc.red_accent, format!("FAULTS: {}", faults.len()));
                     }
                 } else {
                     ui.label("NO TELEMETRY");
@@ -262,13 +283,14 @@ impl eframe::App for GroundStationApp {
         // === COMMAND CONFIRMATION ===
         if let Some(cmd) = self.pending_command {
             let modal = egui::Modal::new(egui::Id::new("cmd_confirm"))
-                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(14, 14, 14)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 50))).inner_margin(30.0).corner_radius(4.0));
+                .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(30.0).corner_radius(4.0));
             let response = modal.show(root_ui.ctx(), |ui| {
                 ui.label(egui::RichText::new(format!("Send {}?", cmd)).size(18.0).family(egui::FontFamily::Name("Bold".into())));
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     if ui.button(egui::RichText::new("CONFIRM").size(15.0)).clicked() {
                         let _ = self.cmd_tx.send(SerialCommand::SendCommand(cmd));
+                        self.state.push_command(&format!("{}", cmd));
                         self.pending_command = None;
                     }
                     if ui.button(egui::RichText::new("CANCEL").size(15.0)).clicked() {
@@ -285,9 +307,9 @@ impl eframe::App for GroundStationApp {
         egui::Panel::bottom("status_bar").show(root_ui, |ui| {
             ui.horizontal(|ui| {
                 let (status, color) = if self.state.connected {
-                    ("CONNECTED", GREEN)
+                    ("CONNECTED", tc.green)
                 } else {
-                    ("DISCONNECTED", RED_ACCENT)
+                    ("DISCONNECTED", tc.red_accent)
                 };
                 ui.colored_label(color, status);
                 ui.separator();
@@ -295,17 +317,65 @@ impl eframe::App for GroundStationApp {
                 ui.separator();
                 ui.label(format!("{:.0} B/s", self.state.throughput_kbps));
                 ui.separator();
-                ui.label(format!("{:.1} PACKETS/s", self.state.packets_per_sec));
+                let expected = self.state.expected_packet_rate as f64;
+                let actual = self.state.packets_per_sec;
+                let ratio = if expected > 0.0 { actual / expected } else { 1.0 };
+                let rate_color = if ratio >= 0.9 {
+                    tc.green
+                } else if ratio >= 0.5 {
+                    tc.yellow
+                } else {
+                    tc.red_accent
+                };
+                ui.colored_label(rate_color, format!("{:.0}/{:.0} Hz ({:.0}%)", actual, expected, ratio * 100.0));
             });
         });
 
-        // === RIGHT PANEL: Map + Vehicle ===
+        // === CONSOLE (right, next to map) ===
+        egui::Panel::right("console_panel")
+            .default_size(220.0)
+            .min_size(180.0)
+            .resizable(true)
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(4.0))
+            .show(root_ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                theme::bordered_section(ui, "CONSOLE", egui::Color32::from_rgb(255, 180, 50), dm, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    egui::ScrollArea::vertical().id_salt("console_scroll").stick_to_bottom(true).show(ui, |ui| {
+                        use crate::state::ConsoleEntry;
+                        let console_gold = egui::Color32::from_rgb(255, 180, 50);
+                        for entry in &self.state.console {
+                            let (elapsed, prefix, text, color) = match entry {
+                                ConsoleEntry::StateChange { state, elapsed_secs } =>
+                                    (*elapsed_secs, "STATE > ", format!("{}", state), console_gold),
+                                ConsoleEntry::CommandSent { command, elapsed_secs } =>
+                                    (*elapsed_secs, "CMD > ", command.clone(), tc.red_accent),
+                                ConsoleEntry::Message { text, elapsed_secs } =>
+                                    (*elapsed_secs, "", text.clone(), tc.label_color),
+                            };
+                            let mins = (elapsed / 60.0) as u32;
+                            let secs = elapsed % 60.0;
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.label(egui::RichText::new(format!("T+{:02}:{:04.1} ", mins, secs)).color(tc.value_color).size(12.5));
+                                ui.label(egui::RichText::new("| ").color(tc.label_color).size(12.5));
+                                if !prefix.is_empty() {
+                                    ui.label(egui::RichText::new(prefix).color(tc.value_color).size(12.5));
+                                }
+                                ui.label(egui::RichText::new(&text).color(color).family(egui::FontFamily::Name("Bold".into())).size(12.5));
+                            });
+                        }
+                    });
+                });
+            });
+
+        // === MAP (rightmost) ===
         egui::Panel::right("right_panel")
             .default_size(300.0)
             .min_size(250.0)
             .resizable(true)
             .show(root_ui, |ui| {
-                bordered_section(ui, "MAP", ACCENT, |ui| {
+                theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
                     let current_gps = t.as_ref()
                         .filter(|t| t.latitude != 0.0 || t.longitude != 0.0)
                         .map(|t| (t.latitude, t.longitude));
@@ -339,64 +409,17 @@ impl eframe::App for GroundStationApp {
                         let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
 
                         let rows: &[(&str, String, egui::Color32)] = &[
-                            ("LAT", format!("{:.6}\u{00b0}", t.latitude), VALUE_COLOR),
-                            ("LON", format!("{:.6}\u{00b0}", t.longitude), VALUE_COLOR),
-                            ("ALT", format!("{:.1} m", t.gps_altitude), VALUE_COLOR),
-                            ("SAT", format!("{}", t.satellites), if t.satellites >= 4 { GREEN } else { RED_ACCENT }),
+                            ("LAT", format!("{:.6}\u{00b0}", t.latitude), tc.value_color),
+                            ("LON", format!("{:.6}\u{00b0}", t.longitude), tc.value_color),
+                            ("ALT", format!("{:.1} m", t.gps_altitude), tc.value_color),
+                            ("SAT", format!("{}", t.satellites), if t.satellites >= 4 { tc.green } else { tc.red_accent }),
                         ];
                         for (label, value, color) in rows {
-                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), LABEL_COLOR);
+                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
                             painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
                             y += line_h;
                         }
                     }
-                });
-
-                ui.add_space(4.0);
-                bordered_section(ui, "VEHICLE", ACCENT, |ui| {
-                if let Some(ref t) = t {
-                    egui::Grid::new("vehicle_grid")
-                        .num_columns(2)
-                        .spacing([8.0, 2.0])
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new("LATITUDE").color(LABEL_COLOR).size(13.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(format!("{:.6} \u{00b0}", t.latitude)).color(VALUE_COLOR).size(13.5));
-                            });
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("LONGITUDE").color(LABEL_COLOR).size(13.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(format!("{:.6} \u{00b0}", t.longitude)).color(VALUE_COLOR).size(13.5));
-                            });
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("BARO ALT (AGL)").color(LABEL_COLOR).size(13.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(format!("{:.1} m", t.baro_altitude)).color(VALUE_COLOR).size(13.5));
-                            });
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("GPS ALT (ASL)").color(LABEL_COLOR).size(13.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(format!("{:.1} m", t.gps_altitude)).color(VALUE_COLOR).size(13.5));
-                            });
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("BARO VELOCITY").color(LABEL_COLOR).size(13.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(format!("{:.1} m/s", t.baro_velocity)).color(VALUE_COLOR).size(13.5));
-                            });
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("SATELLITES").color(LABEL_COLOR).size(13.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let sat_color = if t.satellites >= 4 { GREEN } else { RED_ACCENT };
-                                ui.label(egui::RichText::new(format!("{}", t.satellites)).color(sat_color).size(13.5));
-                            });
-                            ui.end_row();
-                        });
-                }
                 });
             });
 
@@ -404,40 +427,40 @@ impl eframe::App for GroundStationApp {
         egui::CentralPanel::default().show(root_ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.columns(4, |cols| {
-                    bordered_section(&mut cols[0], "STATUS", RED_ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "TICK", &format!("{}", t.tick));
-                            data_row(ui, "STATE", &format!("{}", t.state));
-                            data_row(ui, "FLAGS", &format!("{}", t.flags));
-                            data_row(ui, "LAST COMMAND", &format!("{}", t.last_command));
-                            let drogue_color = if t.relay.drogue_fired { RED_ACCENT } else { GREEN };
-                            data_row_colored(ui, "DROGUE", if t.relay.drogue_fired { "FIRED" } else { "SAFE" }, drogue_color);
-                            let chute_color = if t.relay.parachute_fired { RED_ACCENT } else { GREEN };
-                            data_row_colored(ui, "PARACHUTE", if t.relay.parachute_fired { "FIRED" } else { "SAFE" }, chute_color);
+                            theme::data_row(ui, "TICK", &format!("{}", t.tick), dm);
+                            theme::data_row(ui, "STATE", &format!("{}", t.state), dm);
+                            theme::data_row(ui, "FLAGS", &format!("{}", t.flags), dm);
+                            theme::data_row(ui, "LAST COMMAND", &format!("{}", t.last_command), dm);
+                            let drogue_color = if t.relay.drogue_fired { tc.red_accent } else { tc.green };
+                            theme::data_row_colored(ui, "DROGUE", if t.relay.drogue_fired { "FIRED" } else { "SAFE" }, drogue_color, dm);
+                            let chute_color = if t.relay.parachute_fired { tc.red_accent } else { tc.green };
+                            theme::data_row_colored(ui, "PARACHUTE", if t.relay.parachute_fired { "FIRED" } else { "SAFE" }, chute_color, dm);
                         }
                     });
 
-                    bordered_section(&mut cols[1], "ALTITUDE", ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[1], "ALTITUDE", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "BARO ALT (AGL)", &format!("{:.2} m", t.baro_altitude));
-                            data_row(ui, "BARO VELOCITY", &format!("{:.2} m/s", t.baro_velocity));
+                            theme::data_row(ui, "BARO ALT (AGL)", &format!("{:.2} m", t.baro_altitude), dm);
+                            theme::data_row(ui, "BARO VELOCITY", &format!("{:.2} m/s", t.baro_velocity), dm);
                         }
                     });
 
-                    bordered_section(&mut cols[2], "VELOCITY", ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[2], "VELOCITY", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "VELOCITY X", &format!("{:.2} m/s", t.velocity[0]));
-                            data_row(ui, "VELOCITY Y", &format!("{:.2} m/s", t.velocity[1]));
-                            data_row(ui, "VELOCITY Z", &format!("{:.2} m/s", t.velocity[2]));
+                            theme::data_row(ui, "VELOCITY X", &format!("{:.2} m/s", t.velocity[0]), dm);
+                            theme::data_row(ui, "VELOCITY Y", &format!("{:.2} m/s", t.velocity[1]), dm);
+                            theme::data_row(ui, "VELOCITY Z", &format!("{:.2} m/s", t.velocity[2]), dm);
                         }
                     });
 
-                    bordered_section(&mut cols[3], "POSITION", ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[3], "POSITION", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", t.gps_altitude));
-                            data_row(ui, "LATITUDE", &format!("{:.6} °", t.latitude));
-                            data_row(ui, "LONGITUDE", &format!("{:.6} °", t.longitude));
-                            data_row(ui, "SATELLITES", &format!("{}", t.satellites));
+                            theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", t.gps_altitude), dm);
+                            theme::data_row(ui, "LATITUDE", &format!("{:.6} °", t.latitude), dm);
+                            theme::data_row(ui, "LONGITUDE", &format!("{:.6} °", t.longitude), dm);
+                            theme::data_row(ui, "SATELLITES", &format!("{}", t.satellites), dm);
                         }
                     });
                 });
@@ -445,7 +468,7 @@ impl eframe::App for GroundStationApp {
                 ui.add_space(4.0);
 
                 ui.columns(4, |cols| {
-                    bordered_section(&mut cols[0], "FAULTS", RED_ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
                         if let Some(ref t) = t {
                             let fault_list = [
                                 ("BMP280", t.flags & 0x03),
@@ -455,63 +478,81 @@ impl eframe::App for GroundStationApp {
                                 ("SD", t.flags & 0x300),
                             ];
                             for (name, bits) in fault_list {
-                                let (status, color) = if bits == 0 { ("OK", GREEN) } else { ("FAIL", RED_ACCENT) };
-                                data_row_colored(ui, name, status, color);
+                                let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
+                                theme::data_row_colored(ui, name, status, color, dm);
                             }
                         }
                     });
 
-                    bordered_section(&mut cols[1], "MAGNETOMETER", ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[1], "MAGNETOMETER", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "MAG X", &format!("{:.2} mG", t.mag[0]));
-                            data_row(ui, "MAG Y", &format!("{:.2} mG", t.mag[1]));
-                            data_row(ui, "MAG Z", &format!("{:.2} mG", t.mag[2]));
+                            theme::data_row(ui, "MAG X", &format!("{:.2} mG", t.mag[0]), dm);
+                            theme::data_row(ui, "MAG Y", &format!("{:.2} mG", t.mag[1]), dm);
+                            theme::data_row(ui, "MAG Z", &format!("{:.2} mG", t.mag[2]), dm);
                         }
                     });
 
-                    bordered_section(&mut cols[2], "ACCELERATION", ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[2], "ACCELERATION", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", t.accel[0]));
-                            data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", t.accel[1]));
-                            data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", t.accel[2]));
+                            theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", t.accel[0]), dm);
+                            theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", t.accel[1]), dm);
+                            theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", t.accel[2]), dm);
                         }
                     });
 
-                    bordered_section(&mut cols[3], "GYROSCOPE", ACCENT, |ui| {
+                    theme::bordered_section(&mut cols[3], "GYROSCOPE", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", t.gyro[0]));
-                            data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", t.gyro[1]));
-                            data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", t.gyro[2]));
+                            theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", t.gyro[0]), dm);
+                            theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", t.gyro[1]), dm);
+                            theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", t.gyro[2]), dm);
                         }
                     });
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
-                bordered_section(ui, "ALTITUDE", ACCENT, |ui| {
+                if self.state.extremes_initialized {
+                    theme::bordered_section(ui, "MAX / MIN", egui::Color32::from_rgb(255, 180, 50), dm, |ui| {
+                        ui.columns(4, |cols| {
+                            theme::data_row(&mut cols[0], "PEAK BARO ALT", &format!("{:.1} m", self.state.max_baro_altitude), dm);
+                            theme::data_row(&mut cols[0], "PEAK GPS ALT", &format!("{:.1} m", self.state.max_gps_altitude), dm);
+                            theme::data_row(&mut cols[1], "MAX BARO VEL", &format!("{:.1} m/s", self.state.max_baro_velocity), dm);
+                            theme::data_row(&mut cols[1], "MAX ACCEL", &format!("{:.1} m/s\u{00b2}", self.state.max_accel_magnitude), dm);
+                            theme::data_row(&mut cols[2], "MAX G-FORCE", &format!("{:.1} G", self.state.max_accel_magnitude / 9.81), dm);
+                            theme::data_row(&mut cols[2], "MAX TEMP", &format!("{:.1} \u{00b0}C", self.state.max_temperature), dm);
+                            theme::data_row(&mut cols[3], "MIN TEMP", &format!("{:.1} \u{00b0}C", self.state.min_temperature), dm);
+                            theme::data_row(&mut cols[3], "BATTERY", &format!("{:.2} - {:.2} V", self.state.min_battery_voltage, self.state.max_battery_voltage), dm);
+                        });
+                    });
+                }
+
+                ui.add_space(4.0);
+
+                theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
                     ui::charts::altitude_chart(ui, &self.state);
                 });
                 ui.add_space(4.0);
-                bordered_section(ui, "ACCELERATION", ACCENT, |ui| {
+                theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
                     ui::charts::acceleration_chart(ui, &self.state);
                 });
                 ui.add_space(4.0);
-                bordered_section(ui, "GYROSCOPE", ACCENT, |ui| {
+                theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
                     ui::charts::gyroscope_chart(ui, &self.state);
                 });
                 ui.add_space(4.0);
-                bordered_section(ui, "VELOCITY", ACCENT, |ui| {
+                theme::bordered_section(ui, "VELOCITY", tc.accent, dm, |ui| {
                     ui::charts::velocity_chart(ui, &self.state);
                 });
 
                 ui.add_space(4.0);
-                bordered_section(ui, "RAW PACKET", ACCENT, |ui| {
+                theme::bordered_section(ui, "RAW PACKET", tc.accent, dm, |ui| {
                     if let Some(ref t) = t {
-                        ui::hex_viewer::hex_viewer(ui, &t.raw);
+                        ui::hex_viewer::hex_viewer(ui, &t.raw, dm);
                     } else {
-                        ui.label(egui::RichText::new("NO DATA").color(LABEL_COLOR));
+                        ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
                     }
                 });
+
             });
         });
     }
