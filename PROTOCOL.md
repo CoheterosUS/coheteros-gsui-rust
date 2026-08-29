@@ -14,6 +14,7 @@ uint32: 4 bytes
 
 Any enum, bitmask, or structure is subject to change without notice.
 Any agent that reads this file should ask any necessary clarifying questions whenever information is missing, ambiguous, incomplete, or required to proceed correctly.
+Any agent that reads this file should not assume that any information is correct, complete, or up-to-date unless it is explicitly stated to be so.
 
 ## SystemState (Enum)
 
@@ -103,6 +104,8 @@ Any agent that reads this file should ask any necessary clarifying questions whe
 
 ## Command Frame (Structure, Packed)
 
+Received over UART from external board (ESP32/Arduino).
+
 | Offset | Size | Type  | Value  | Description         |
 |--------|------|-------|--------|---------------------|
 | 0      | 1    | uint8 | `0xFE` | Sync LSB            |
@@ -110,6 +113,59 @@ Any agent that reads this file should ask any necessary clarifying questions whe
 | 2      | 1    | uint8 | CMD    | CommandType         |
 | 3      | 1    | uint8 | `0x00` | Payload Length (0)  |
 | 4      | 1    | uint8 | `0xBE` | Footer              |
+
+## GPS Data Frame (Structure, Packed)
+
+Command `0x20` (COMMAND_GPS_DATA). Received over UART from external board (ESP32/Arduino).
+
+| Offset | Size | Type   | Value  | Description          |
+|--------|------|--------|--------|----------------------|
+| 0      | 1    | uint8  | `0xFE` | Sync LSB             |
+| 1      | 1    | uint8  | `0xCA` | Sync MSB             |
+| 2      | 1    | uint8  | `0x20` | COMMAND_GPS_DATA     |
+| 3      | 1    | uint8  | `0x13` | Payload Length (19)  |
+| 4–22   |      |        |        | GPS Payload          |
+| 23     | 1    | uint8  | `0xBE` | Footer               |
+
+## GPS Payload (Structure, Packed)
+
+| Offset | Size | Type   | Field        | Unit             |
+|--------|------|--------|--------------|------------------|
+| 0      | 4    | uint32 | UnixTime     | Epoch Seconds    |
+| 4      | 2    | uint16 | Milliseconds | 0–999            |
+| 6      | 4    | int32  | Latitude     | Degrees × 10^7   |
+| 10     | 4    | int32  | Longitude    | Degrees × 10^7   |
+| 14     | 4    | int32  | Altitude     | Millimeters      |
+| 18     | 1    | uint8  | Satellites   | Count            |
+
+## HIL Data Frame (Structure, Packed)
+
+Command `0x10` (COMMAND_HIL_DATA). Received over UART from external device (Laptop, ESP32, Arduino, etc.).
+
+| Offset | Size | Type   | Value  | Description          |
+|--------|------|--------|--------|----------------------|
+| 0      | 1    | uint8  | `0xFE` | Sync LSB             |
+| 1      | 1    | uint8  | `0xCA` | Sync MSB             |
+| 2      | 1    | uint8  | `0x10` | COMMAND_HIL_DATA     |
+| 3      | 1    | uint8  | `0x2C` | Payload Length (44)  |
+| 4–47   |      |        |        | HIL Payload          |
+| 48     | 1    | uint8  | `0xBE` | Footer               |
+
+## HIL Payload (Structure, Packed)
+
+| Offset | Size | Type    | Field        | Unit       |
+|--------|------|---------|--------------|------------|
+| 0      | 4    | float32 | AccelX       | m/s²       |
+| 4      | 4    | float32 | AccelY       | m/s²       |
+| 8      | 4    | float32 | AccelZ       | m/s²       |
+| 12     | 4    | float32 | GyroX        | Degrees/s  |
+| 16     | 4    | float32 | GyroY        | Degrees/s  |
+| 20     | 4    | float32 | GyroZ        | Degrees/s  |
+| 24     | 4    | float32 | MagX         | Milligauss |
+| 28     | 4    | float32 | MagY         | Milligauss |
+| 32     | 4    | float32 | MagZ         | Milligauss |
+| 36     | 4    | float32 | PressurePa   | Pascals    |
+| 40     | 4    | float32 | TemperatureC | Celsius    |
 
 ## Wire Telemetry Packet (Structure, Packed)
 
