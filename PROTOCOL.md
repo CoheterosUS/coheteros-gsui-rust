@@ -13,6 +13,7 @@ uint16: 2 bytes
 uint32: 4 bytes
 
 Any enum, bitmask, or structure is subject to change without notice.
+Any agent that reads this file should ask any necessary clarifying questions whenever information is missing, ambiguous, incomplete, or required to proceed correctly.
 
 ## SystemState (Enum)
 
