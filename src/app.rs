@@ -3,11 +3,19 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::csv_recorder::CsvRecorder;
+use crate::sd_log::record::SD_RECORD_FIELDS;
+use crate::sd_viewer::state::SdViewerState;
 use crate::serial::worker::{SerialCommand, SerialEvent};
 use crate::state::AppState;
 use crate::telemetry::packet::{self, Command, FlightState};
 use crate::ui;
 use crate::ui::theme;
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum ActiveTab {
+    LiveTelemetry,
+    SdViewer,
+}
 
 pub struct GroundStationApp {
     state: AppState,
@@ -19,6 +27,8 @@ pub struct GroundStationApp {
     show_about: bool,
     csv_recorder: Option<CsvRecorder>,
     logo_texture: Option<egui::TextureHandle>,
+    active_tab: ActiveTab,
+    sd_viewer: SdViewerState,
 }
 
 impl GroundStationApp {
@@ -50,72 +60,15 @@ impl GroundStationApp {
             show_about: false,
             csv_recorder: None,
             logo_texture,
+            active_tab: ActiveTab::LiveTelemetry,
+            sd_viewer: SdViewerState::new(),
         }
     }
-}
 
-impl eframe::App for GroundStationApp {
-    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn render_live_telemetry(&mut self, root_ui: &mut egui::Ui) {
         let dm = self.state.dark_mode;
         let tc = theme::current_theme(dm);
-
-        if let Ok(pos) = self.device_pos.try_lock() {
-            self.state.ground_pos = *pos;
-        }
-
-        while let Ok(evt) = self.evt_rx.try_recv() {
-            match evt {
-                SerialEvent::Packet(t) => {
-                    if let Some(ref mut rec) = self.csv_recorder {
-                        rec.record(&t);
-                    }
-                    self.state.push_telemetry(*t);
-                }
-                SerialEvent::Connected(name) => {
-                    self.state.connected = true;
-                    self.state.push_message(&format!("Connected to {}", name));
-                }
-                SerialEvent::Disconnected => {
-                    self.state.connected = false;
-                    self.state.push_message("Disconnected");
-                }
-                SerialEvent::Error(e) => {
-                    self.state.push_message(&e);
-                }
-                SerialEvent::PortList(ports) => {
-                    self.state.available_ports = ports;
-                }
-            }
-        }
-
         let t = self.state.latest.clone();
-
-        // === ABOUT WINDOW ===
-        egui::Window::new("About")
-            .open(&mut self.show_about)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(40.0).corner_radius(4.0))
-            .show(root_ui.ctx(), |ui| {
-                ui.vertical_centered(|ui| {
-                    if let Some(ref tex) = self.logo_texture {
-                        let logo_size = egui::vec2(100.0, 100.0);
-                        ui.image(egui::load::SizedTexture::new(tex.id(), logo_size));
-                        ui.add_space(12.0);
-                    }
-                    ui.label(egui::RichText::new("COHETEROS GROUND STATION").family(egui::FontFamily::Name("Bold".into())).size(22.0).color(tc.accent));
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(15.0).color(tc.label_color));
-                    ui.add_space(16.0);
-                    ui.label(egui::RichText::new("BUILT BY THE COHETEROS TEAM\nFOR THE EUROPEAN ROCKETRY CHALLENGE").size(14.0).color(tc.value_color));
-                    ui.add_space(16.0);
-                    let link_color = egui::Color32::from_rgb(100, 149, 237);
-                    ui.hyperlink_to(egui::RichText::new("coheteros.com").size(14.0).color(link_color), "https://coheteros.com");
-                    ui.hyperlink_to(egui::RichText::new("LinkedIn").size(14.0).color(link_color), "https://www.linkedin.com/company/coheteros-us/");
-                    ui.hyperlink_to(egui::RichText::new("GitHub").size(14.0).color(link_color), "https://github.com/CoheterosUS");
-                });
-            });
 
         // === TOP BAR: State + key values ===
         egui::Panel::top("top_bar")
@@ -156,16 +109,6 @@ impl eframe::App for GroundStationApp {
                             baud: self.state.selected_baud,
                         });
                     }
-                }
-
-                if ui.button("ABOUT").clicked() {
-                    self.show_about = !self.show_about;
-                }
-
-                let theme_label = if self.state.dark_mode { "LIGHT" } else { "DARK" };
-                if ui.button(theme_label).clicked() {
-                    self.state.dark_mode = !self.state.dark_mode;
-                    theme::apply_visuals(ui.ctx(), self.state.dark_mode);
                 }
 
                 ui.separator();
@@ -458,8 +401,8 @@ impl eframe::App for GroundStationApp {
                     theme::bordered_section(&mut cols[3], "POSITION", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", t.gps_altitude), dm);
-                            theme::data_row(ui, "LATITUDE", &format!("{:.6} °", t.latitude), dm);
-                            theme::data_row(ui, "LONGITUDE", &format!("{:.6} °", t.longitude), dm);
+                            theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", t.latitude), dm);
+                            theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", t.longitude), dm);
                             theme::data_row(ui, "SATELLITES", &format!("{}", t.satellites), dm);
                         }
                     });
@@ -547,7 +490,7 @@ impl eframe::App for GroundStationApp {
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "RAW PACKET", tc.accent, dm, |ui| {
                     if let Some(ref t) = t {
-                        ui::hex_viewer::hex_viewer(ui, &t.raw, dm);
+                        ui::hex_viewer::hex_viewer(ui, &t.raw, packet::PACKET_FIELDS, dm);
                     } else {
                         ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
                     }
@@ -555,5 +498,403 @@ impl eframe::App for GroundStationApp {
 
             });
         });
+    }
+
+    fn render_sd_viewer(&mut self, root_ui: &mut egui::Ui) {
+        let dm = self.state.dark_mode;
+        let tc = theme::current_theme(dm);
+
+        self.sd_viewer.init_map(root_ui.ctx());
+
+        // === SD TOP BAR ===
+        egui::Panel::top("sd_top_bar")
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
+            .show(root_ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                if ui.button("OPEN FILE").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Binary", &["bin"])
+                        .add_filter("All", &["*"])
+                        .pick_file()
+                    {
+                        self.sd_viewer.load_file(&path.display().to_string());
+                    }
+                }
+
+                if let Some(ref path) = self.sd_viewer.file_path.clone() {
+                    if ui.button("CLOSE").clicked() {
+                        self.sd_viewer.close_file();
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(path).family(egui::FontFamily::Monospace));
+                    ui.separator();
+                    ui.label(format!("{} RECORDS", self.sd_viewer.records.len()));
+                    ui.separator();
+                    let dur = self.sd_viewer.duration_secs();
+                    let mins = (dur / 60.0) as u32;
+                    let secs = dur % 60.0;
+                    ui.label(format!("DURATION: {:02}:{:04.1}", mins, secs));
+                }
+
+                if let Some(ref err) = self.sd_viewer.error {
+                    ui.separator();
+                    ui.colored_label(tc.red_accent, err.as_str());
+                }
+            });
+        });
+
+        if self.sd_viewer.records.is_empty() {
+            egui::CentralPanel::default().show(root_ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    ui.label(egui::RichText::new("OPEN A .BIN FILE TO VIEW SD LOG DATA")
+                        .size(18.0)
+                        .color(tc.label_color));
+                });
+            });
+            return;
+        }
+
+        // === SD BOTTOM: Timeline scrubber ===
+        egui::Panel::bottom("sd_scrubber")
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
+            .show(root_ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("RECORD");
+                let max = self.sd_viewer.records.len().saturating_sub(1);
+                ui.add(egui::Slider::new(&mut self.sd_viewer.selected_index, 0..=max)
+                    .show_value(true));
+
+                if let Some(r) = self.sd_viewer.selected_record() {
+                    if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
+                        ui.separator();
+                        ui.label(egui::RichText::new(dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string())
+                            .family(egui::FontFamily::Monospace));
+                    }
+                    ui.separator();
+                    ui.label(format!("TICK: {}", r.tick));
+                }
+            });
+        });
+
+        // === MAP (right panel) ===
+        egui::Panel::right("sd_map_panel")
+            .default_size(300.0)
+            .min_size(250.0)
+            .resizable(true)
+            .show(root_ui, |ui| {
+                theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
+                    let current_gps = self.sd_viewer.selected_record()
+                        .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
+                        .map(|r| (r.latitude, r.longitude));
+                    if let Some(ref mut map_state) = self.sd_viewer.map_state {
+                        let map_rect = ui::map::gps_map(
+                            ui,
+                            &self.sd_viewer.gps_trail,
+                            current_gps,
+                            None,
+                            map_state,
+                        );
+
+                        if let Some(r) = self.sd_viewer.selected_record() {
+                            let overlay_width = 195.0;
+                            let overlay_height = 82.0;
+                            let overlay_pos = egui::pos2(
+                                map_rect.right() - overlay_width - 4.0,
+                                map_rect.bottom() - overlay_height - 4.0,
+                            );
+                            let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
+
+                            let painter = ui.painter();
+                            painter.rect_filled(overlay_rect, 2.0, egui::Color32::from_black_alpha(220));
+
+                            let s = 14.0;
+                            let mut y = overlay_rect.top() + 5.0;
+                            let x_label = overlay_rect.left() + 8.0;
+                            let x_value = overlay_rect.left() + 44.0;
+                            let line_h = 18.0;
+
+                            let font = egui::FontId::monospace(s);
+                            let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
+
+                            let rows: &[(&str, String, egui::Color32)] = &[
+                                ("LAT", format!("{:.6}\u{00b0}", r.latitude), tc.value_color),
+                                ("LON", format!("{:.6}\u{00b0}", r.longitude), tc.value_color),
+                                ("ALT", format!("{:.1} m", r.gps_altitude), tc.value_color),
+                                ("SAT", format!("{}", r.satellites), if r.satellites >= 4 { tc.green } else { tc.red_accent }),
+                            ];
+                            for (label, value, color) in rows {
+                                painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
+                                painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
+                                y += line_h;
+                            }
+                        }
+                    }
+                });
+            });
+
+        // === CENTER: Data grid + Charts ===
+        egui::CentralPanel::default().show(root_ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
+                let r = self.sd_viewer.selected_record().cloned();
+
+                ui.columns(4, |cols| {
+                    theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
+                            theme::data_row(ui, "STATE", &format!("{}", r.state), dm);
+                            theme::data_row(ui, "FLAGS", &format!("{}", r.flags), dm);
+                            theme::data_row(ui, "LAST COMMAND", &format!("{}", r.last_command), dm);
+                            let drogue_color = if r.relay.drogue_fired { tc.red_accent } else { tc.green };
+                            theme::data_row_colored(ui, "DROGUE", if r.relay.drogue_fired { "FIRED" } else { "SAFE" }, drogue_color, dm);
+                            let chute_color = if r.relay.parachute_fired { tc.red_accent } else { tc.green };
+                            theme::data_row_colored(ui, "PARACHUTE", if r.relay.parachute_fired { "FIRED" } else { "SAFE" }, chute_color, dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[1], "POSITION", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", r.gps_altitude), dm);
+                            theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", r.latitude), dm);
+                            theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", r.longitude), dm);
+                            theme::data_row(ui, "SATELLITES", &format!("{}", r.satellites), dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[2], "SENSORS", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "PRESSURE", &format!("{:.0} Pa", r.pressure_pa), dm);
+                            theme::data_row(ui, "TEMPERATURE", &format!("{:.2} \u{00b0}C", r.temperature_c), dm);
+                            theme::data_row(ui, "BATTERY", &format!("{:.2} V", r.battery_voltage), dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[3], "MAGNETOMETER", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "MAG X", &format!("{:.2} mG", r.mag[0]), dm);
+                            theme::data_row(ui, "MAG Y", &format!("{:.2} mG", r.mag[1]), dm);
+                            theme::data_row(ui, "MAG Z", &format!("{:.2} mG", r.mag[2]), dm);
+                        }
+                    });
+                });
+
+                ui.add_space(4.0);
+
+                ui.columns(4, |cols| {
+                    theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            let fault_list = [
+                                ("BMP280", r.flags & 0x03),
+                                ("BMP581", r.flags & 0x0C),
+                                ("IIM42653", r.flags & 0x30),
+                                ("IIS2MDCTR", r.flags & 0xC0),
+                                ("SD", r.flags & 0x300),
+                            ];
+                            for (name, bits) in fault_list {
+                                let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
+                                theme::data_row_colored(ui, name, status, color, dm);
+                            }
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
+                            theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
+                            theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", r.accel[2]), dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
+                            theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
+                            theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", r.gyro[2]), dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[3], "TIMESTAMP", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "UNIX TIME", &format!("{}", r.unix_time), dm);
+                            theme::data_row(ui, "MILLIS", &format!("{}", r.milliseconds), dm);
+                            if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
+                                theme::data_row(ui, "UTC", &dt.format("%H:%M:%S%.3f").to_string(), dm);
+                            }
+                        }
+                    });
+                });
+
+                ui.add_space(4.0);
+
+                use crate::sd_viewer::charts;
+                let mut clicked_ts: Option<f64> = None;
+
+                theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "GPS ALTITUDE", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &self.sd_viewer.timestamps, &self.sd_viewer.gyro_x, &self.sd_viewer.gyro_y, &self.sd_viewer.gyro_z) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery) {
+                        clicked_ts = Some(t);
+                    }
+                });
+
+                if let Some(t) = clicked_ts {
+                    self.sd_viewer.selected_index = charts::timestamp_to_index(&self.sd_viewer.timestamps, t);
+                }
+
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "RAW RECORD", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        ui::hex_viewer::hex_viewer(ui, &r.raw, SD_RECORD_FIELDS, dm);
+                    } else {
+                        ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
+                    }
+                });
+            });
+        });
+    }
+}
+
+impl eframe::App for GroundStationApp {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let dm = self.state.dark_mode;
+        let tc = theme::current_theme(dm);
+
+        if let Ok(pos) = self.device_pos.try_lock() {
+            self.state.ground_pos = *pos;
+        }
+
+        // Always process serial events regardless of active tab
+        while let Ok(evt) = self.evt_rx.try_recv() {
+            match evt {
+                SerialEvent::Packet(t) => {
+                    if let Some(ref mut rec) = self.csv_recorder {
+                        rec.record(&t);
+                    }
+                    self.state.push_telemetry(*t);
+                }
+                SerialEvent::Connected(name) => {
+                    self.state.connected = true;
+                    self.state.push_message(&format!("Connected to {}", name));
+                }
+                SerialEvent::Disconnected => {
+                    self.state.connected = false;
+                    self.state.push_message("Disconnected");
+                }
+                SerialEvent::Error(e) => {
+                    self.state.push_message(&e);
+                }
+                SerialEvent::PortList(ports) => {
+                    self.state.available_ports = ports;
+                }
+            }
+        }
+
+        // === ABOUT WINDOW ===
+        egui::Window::new("About")
+            .open(&mut self.show_about)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(40.0).corner_radius(4.0))
+            .show(root_ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| {
+                    if let Some(ref tex) = self.logo_texture {
+                        let logo_size = egui::vec2(100.0, 100.0);
+                        ui.image(egui::load::SizedTexture::new(tex.id(), logo_size));
+                        ui.add_space(12.0);
+                    }
+                    ui.label(egui::RichText::new("COHETEROS GROUND STATION").family(egui::FontFamily::Name("Bold".into())).size(22.0).color(tc.accent));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(15.0).color(tc.label_color));
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new("BUILT BY THE COHETEROS TEAM\nFOR THE EUROPEAN ROCKETRY CHALLENGE").size(14.0).color(tc.value_color));
+                    ui.add_space(16.0);
+                    let link_color = egui::Color32::from_rgb(100, 149, 237);
+                    ui.hyperlink_to(egui::RichText::new("coheteros.com").size(14.0).color(link_color), "https://coheteros.com");
+                    ui.hyperlink_to(egui::RichText::new("LinkedIn").size(14.0).color(link_color), "https://www.linkedin.com/company/coheteros-us/");
+                    ui.hyperlink_to(egui::RichText::new("GitHub").size(14.0).color(link_color), "https://github.com/CoheterosUS");
+                });
+            });
+
+        // === TAB BAR ===
+        egui::Panel::top("tab_bar")
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 4)))
+            .show(root_ui, |ui| {
+                ui.horizontal(|ui| {
+                    let tabs = [
+                        (ActiveTab::LiveTelemetry, "LIVE TELEMETRY"),
+                        (ActiveTab::SdViewer, "SD VIEWER"),
+                    ];
+
+                    for (tab, label) in tabs {
+                        let active = self.active_tab == tab;
+                        let text_color = if active { tc.accent } else { tc.label_color };
+                        let border_color = if active { tc.accent } else { egui::Color32::TRANSPARENT };
+
+                        let button = egui::Button::new(
+                            egui::RichText::new(label)
+                                .family(egui::FontFamily::Name("Bold".into()))
+                                .size(13.0)
+                                .color(text_color),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::new(2.0, border_color))
+                        .corner_radius(0.0);
+
+                        if ui.add(button).clicked() {
+                            self.active_tab = tab;
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let theme_label = if self.state.dark_mode { "LIGHT" } else { "DARK" };
+                        if ui.button(theme_label).clicked() {
+                            self.state.dark_mode = !self.state.dark_mode;
+                            theme::apply_visuals(ui.ctx(), self.state.dark_mode);
+                        }
+                        if ui.button("ABOUT").clicked() {
+                            self.show_about = !self.show_about;
+                        }
+                    });
+                });
+            });
+
+        match self.active_tab {
+            ActiveTab::LiveTelemetry => self.render_live_telemetry(root_ui),
+            ActiveTab::SdViewer => self.render_sd_viewer(root_ui),
+        }
     }
 }

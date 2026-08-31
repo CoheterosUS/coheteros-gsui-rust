@@ -13,6 +13,8 @@ csv = "1.3"
 walkers = "0.58.0"
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 windows = { version = "0.61", features = ["Devices_Geolocation", "Foundation"] }
+rfd = "0.15"
+chrono = "0.4"
 
 [build-dependencies]
 winres = "0.1"

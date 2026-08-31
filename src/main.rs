@@ -3,6 +3,8 @@
 mod app;
 mod csv_recorder;
 mod geolocation;
+mod sd_log;
+mod sd_viewer;
 mod serial;
 mod state;
 mod telemetry;
