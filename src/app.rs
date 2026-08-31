@@ -366,10 +366,9 @@ impl GroundStationApp {
                 });
             });
 
-        // === CENTER: Data grid + Altitude chart ===
+        // === CENTER: Data grid (sticky) + Charts (scrollable) ===
         egui::CentralPanel::default().show(root_ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.columns(4, |cols| {
+            ui.columns(4, |cols| {
                     theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "TICK", &format!("{}", t.tick), dm);
@@ -471,6 +470,7 @@ impl GroundStationApp {
 
                 ui.add_space(4.0);
 
+            egui::ScrollArea::vertical().show(ui, |ui| {
                 theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
                     ui::charts::altitude_chart(ui, &self.state);
                 });
@@ -506,6 +506,22 @@ impl GroundStationApp {
 
         self.sd_viewer.init_map(root_ui.ctx());
 
+        // === DRAG & DROP ===
+        let dropped_file = root_ui.ctx().input(|i| {
+            i.raw.dropped_files.iter().find_map(|f| {
+                let p = f.path();
+                let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext.eq_ignore_ascii_case("bin") {
+                    Some(p.display().to_string())
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(path) = dropped_file {
+            self.sd_viewer.load_file(&path);
+        }
+
         // === SD TOP BAR ===
         egui::Panel::top("sd_top_bar")
             .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
@@ -540,13 +556,25 @@ impl GroundStationApp {
                     ui.separator();
                     ui.colored_label(tc.red_accent, err.as_str());
                 }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let border_color = if self.sd_viewer.link_axes { tc.accent } else { tc.label_color };
+                    let checkbox_stroke = egui::Stroke::new(1.5, border_color);
+                    ui.scope(|ui| {
+                        let visuals = &mut ui.style_mut().visuals;
+                        visuals.widgets.inactive.bg_stroke = checkbox_stroke;
+                        visuals.widgets.hovered.bg_stroke = checkbox_stroke;
+                        visuals.widgets.active.bg_stroke = checkbox_stroke;
+                        ui.checkbox(&mut self.sd_viewer.link_axes, "SYNC AXES");
+                    });
+                });
             });
         });
 
         if self.sd_viewer.records.is_empty() {
             egui::CentralPanel::default().show(root_ui, |ui| {
                 ui.centered_and_justified(|ui| {
-                    ui.label(egui::RichText::new("OPEN A .BIN FILE TO VIEW SD LOG DATA")
+                    ui.label(egui::RichText::new("OPEN OR DROP A .BIN FILE TO VIEW SD LOG DATA")
                         .size(18.0)
                         .color(tc.label_color));
                 });
@@ -632,12 +660,11 @@ impl GroundStationApp {
                 });
             });
 
-        // === CENTER: Data grid + Charts ===
+        // === CENTER: Data grid (sticky) + Charts (scrollable) ===
         egui::CentralPanel::default().show(root_ui, |ui| {
-            egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
-                let r = self.sd_viewer.selected_record().cloned();
+            let r = self.sd_viewer.selected_record().cloned();
 
-                ui.columns(4, |cols| {
+            ui.columns(4, |cols| {
                     theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
                         if let Some(ref r) = r {
                             theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
@@ -725,50 +752,77 @@ impl GroundStationApp {
 
                 ui.add_space(4.0);
 
+            egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
+                let selected_t = self.sd_viewer.timestamps.get(self.sd_viewer.selected_index).copied();
+                let zoom_x = self.sd_viewer.zoom_x.take();
+                let link_axes = self.sd_viewer.link_axes;
+
                 use crate::sd_viewer::charts;
                 let mut clicked_ts: Option<f64> = None;
+                let mut new_zoom: Option<(f64, f64)> = None;
 
                 theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers) {
-                        clicked_ts = Some(t);
+                    if let Some(click) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers, selected_t, zoom_x, link_axes) {
+                        match click {
+                            charts::TimelineClick::Segment { start, end } => {
+                                if self.sd_viewer.zoomed_segment == Some((start, end)) {
+                                    self.sd_viewer.zoomed_segment = None;
+                                    if let (Some(&first), Some(&last)) = (self.sd_viewer.timestamps.first(), self.sd_viewer.timestamps.last()) {
+                                        let pad = (last - first) * 0.02;
+                                        new_zoom = Some((first - pad, last + pad));
+                                    }
+                                } else {
+                                    let padding = (end - start) * 0.05;
+                                    new_zoom = Some((start - padding, end + padding));
+                                    self.sd_viewer.zoomed_segment = Some((start, end));
+                                }
+                            }
+                            charts::TimelineClick::Point(t) => {
+                                clicked_ts = Some(t);
+                            }
+                        }
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "GPS ALTITUDE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z) {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z, selected_t, zoom_x, link_axes) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &self.sd_viewer.timestamps, &self.sd_viewer.gyro_x, &self.sd_viewer.gyro_y, &self.sd_viewer.gyro_z) {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &self.sd_viewer.timestamps, &self.sd_viewer.gyro_x, &self.sd_viewer.gyro_y, &self.sd_viewer.gyro_z, selected_t, zoom_x, link_axes) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature, selected_t, zoom_x, link_axes) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes) {
                         clicked_ts = Some(t);
                     }
                 });
+
+                if let Some(z) = new_zoom {
+                    self.sd_viewer.zoom_x = Some(z);
+                }
 
                 if let Some(t) = clicked_ts {
                     self.sd_viewer.selected_index = charts::timestamp_to_index(&self.sd_viewer.timestamps, t);
@@ -782,7 +836,7 @@ impl GroundStationApp {
                         ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
                     }
                 });
-            });
+            }); // ScrollArea
         });
     }
 }
