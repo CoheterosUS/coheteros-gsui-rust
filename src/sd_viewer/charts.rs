@@ -30,7 +30,7 @@ fn hover_x(hover: &egui_plot::HoverPosition<'_>) -> f64 {
     }
 }
 
-fn sd_plot(id: &str, link_axes: bool) -> Plot<'_> {
+fn sd_plot(id: &str, link_axes: bool, reset: bool) -> Plot<'_> {
     let mut plot = Plot::new(id)
         .height(150.0)
         .allow_drag(true)
@@ -40,6 +40,9 @@ fn sd_plot(id: &str, link_axes: bool) -> Plot<'_> {
         .show_crosshair(true);
     if link_axes {
         plot = plot.link_axis(egui::Id::new(LINK_GROUP), [true, false]);
+    }
+    if reset {
+        plot = plot.reset();
     }
     plot
 }
@@ -90,13 +93,14 @@ pub fn single_series_chart(
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
+    reset: bool,
 ) -> Option<f64> {
     let points: PlotPoints = decimated_points(timestamps, values).into();
     let ts = timestamps;
     let vals = values;
     let n = name.to_string();
     let u = unit.to_string();
-    let plot_response = sd_plot(id, link_axes)
+    let plot_response = sd_plot(id, link_axes, reset)
         .label_formatter(move |hover| {
             let x = hover_x(hover);
             let val = lookup_by_timestamp(ts, vals, x)?;
@@ -125,6 +129,7 @@ pub fn triple_series_chart(
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
+    reset: bool,
 ) -> Option<f64> {
     let px: PlotPoints = decimated_points(timestamps, x_vals).into();
     let py: PlotPoints = decimated_points(timestamps, y_vals).into();
@@ -134,7 +139,7 @@ pub fn triple_series_chart(
     let yv = y_vals;
     let zv = z_vals;
     let u = unit.to_string();
-    let plot_response = sd_plot(id, link_axes)
+    let plot_response = sd_plot(id, link_axes, reset)
         .label_formatter(move |hover| {
             let x = hover_x(hover);
             let mut lines = Vec::new();
@@ -171,6 +176,7 @@ pub fn state_timeline_chart(
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
+    reset: bool,
 ) -> Option<TimelineClick> {
     let mut by_state: BTreeMap<u8, (&str, egui::Color32, Vec<Bar>)> = BTreeMap::new();
     for seg in segments {
@@ -198,6 +204,9 @@ pub fn state_timeline_chart(
         .show_crosshair(false);
     if link_axes {
         timeline_plot = timeline_plot.link_axis(egui::Id::new(LINK_GROUP), [true, false]);
+    }
+    if reset {
+        timeline_plot = timeline_plot.reset();
     }
 
     let plot_response = timeline_plot

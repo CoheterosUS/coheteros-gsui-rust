@@ -798,6 +798,7 @@ impl GroundStationApp {
             egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
                 let selected_t = self.sd_viewer.timestamps.get(self.sd_viewer.selected_index).copied();
                 let zoom_x = self.sd_viewer.zoom_x.take();
+                let reset = std::mem::take(&mut self.sd_viewer.reset_zoom);
                 let link_axes = self.sd_viewer.link_axes;
 
                 use crate::sd_viewer::charts;
@@ -805,15 +806,12 @@ impl GroundStationApp {
                 let mut new_zoom: Option<(f64, f64)> = None;
 
                 theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
-                    if let Some(click) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers, selected_t, zoom_x, link_axes) {
+                    if let Some(click) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers, selected_t, zoom_x, link_axes, reset) {
                         match click {
                             charts::TimelineClick::Segment { start, end } => {
                                 if self.sd_viewer.zoomed_segment == Some((start, end)) {
                                     self.sd_viewer.zoomed_segment = None;
-                                    if let (Some(&first), Some(&last)) = (self.sd_viewer.timestamps.first(), self.sd_viewer.timestamps.last()) {
-                                        let pad = (last - first) * 0.02;
-                                        new_zoom = Some((first - pad, last + pad));
-                                    }
+                                    self.sd_viewer.reset_zoom = true;
                                 } else {
                                     let padding = (end - start) * 0.05;
                                     new_zoom = Some((start - padding, end + padding));
@@ -828,37 +826,37 @@ impl GroundStationApp {
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "GPS ALTITUDE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z, selected_t, zoom_x, link_axes) {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &self.sd_viewer.timestamps, &self.sd_viewer.gyro_x, &self.sd_viewer.gyro_y, &self.sd_viewer.gyro_z, selected_t, zoom_x, link_axes) {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &self.sd_viewer.timestamps, &self.sd_viewer.gyro_x, &self.sd_viewer.gyro_y, &self.sd_viewer.gyro_z, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature, selected_t, zoom_x, link_axes) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 });
