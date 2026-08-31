@@ -322,6 +322,21 @@ impl GroundStationApp {
                     let current_gps = t.as_ref()
                         .filter(|t| t.latitude != 0.0 || t.longitude != 0.0)
                         .map(|t| (t.latitude, t.longitude));
+                    if self.state.lock_gps {
+                        self.map_state.memory.follow_my_position();
+                    }
+                    ui.horizontal(|ui| {
+                        let border_color = if self.state.lock_gps { tc.accent } else { tc.label_color };
+                        let checkbox_stroke = egui::Stroke::new(1.5, border_color);
+                        ui.scope(|ui| {
+                            let visuals = &mut ui.style_mut().visuals;
+                            visuals.widgets.inactive.bg_stroke = checkbox_stroke;
+                            visuals.widgets.hovered.bg_stroke = checkbox_stroke;
+                            visuals.widgets.active.bg_stroke = checkbox_stroke;
+                            ui.checkbox(&mut self.state.lock_gps, "LOCK ON GPS");
+                        });
+                    });
+                    ui.add_space(4.0);
                     let map_rect = ui::map::gps_map(
                         ui,
                         &self.state.gps_trail,
@@ -573,10 +588,23 @@ impl GroundStationApp {
 
         if self.sd_viewer.records.is_empty() {
             egui::CentralPanel::default().show(root_ui, |ui| {
-                ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() * 0.3);
                     ui.label(egui::RichText::new("OPEN OR DROP A .BIN FILE TO VIEW SD LOG DATA")
                         .size(18.0)
                         .color(tc.label_color));
+                    ui.add_space(20.0);
+                    let hint_color = tc.label_color.gamma_multiply(0.6);
+                    for hint in [
+                        "SCROLL TO ZOOM CHARTS, DRAG TO PAN",
+                        "DOUBLE CLICK TO RESET ZOOM",
+                        "CLICK A FLIGHT STATE SEGMENT TO ZOOM ALL CHARTS TO IT",
+                        "CLICK SAME SEGMENT TO RESET ZOOM",
+                        "CLICK ANY CHART TO SELECT A RECORD",
+                        "\"SYNC AXES\" CHECKBOX LINKS PAN/ZOOM ACROSS CHARTS",
+                    ] {
+                        ui.label(egui::RichText::new(hint).size(13.0).color(hint_color));
+                    }
                 });
             });
             return;
@@ -615,6 +643,21 @@ impl GroundStationApp {
                         .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
                         .map(|r| (r.latitude, r.longitude));
                     if let Some(ref mut map_state) = self.sd_viewer.map_state {
+                        if self.sd_viewer.lock_gps {
+                            map_state.memory.follow_my_position();
+                        }
+                        ui.horizontal(|ui| {
+                            let border_color = if self.sd_viewer.lock_gps { tc.accent } else { tc.label_color };
+                            let checkbox_stroke = egui::Stroke::new(1.5, border_color);
+                            ui.scope(|ui| {
+                                let visuals = &mut ui.style_mut().visuals;
+                                visuals.widgets.inactive.bg_stroke = checkbox_stroke;
+                                visuals.widgets.hovered.bg_stroke = checkbox_stroke;
+                                visuals.widgets.active.bg_stroke = checkbox_stroke;
+                                ui.checkbox(&mut self.sd_viewer.lock_gps, "LOCK ON GPS");
+                            });
+                        });
+                        ui.add_space(4.0);
                         let map_rect = ui::map::gps_map(
                             ui,
                             &self.sd_viewer.gps_trail,
@@ -900,6 +943,8 @@ impl eframe::App for GroundStationApp {
                     ui.hyperlink_to(egui::RichText::new("coheteros.com").size(14.0).color(link_color), "https://coheteros.com");
                     ui.hyperlink_to(egui::RichText::new("LinkedIn").size(14.0).color(link_color), "https://www.linkedin.com/company/coheteros-us/");
                     ui.hyperlink_to(egui::RichText::new("GitHub").size(14.0).color(link_color), "https://github.com/CoheterosUS");
+                    ui.add_space(24.0);
+                    ui.label(egui::RichText::new("ANGELO WAS HERE").size(9.0).color(tc.label_color.gamma_multiply(0.3)));
                 });
             });
 
