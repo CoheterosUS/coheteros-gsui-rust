@@ -521,6 +521,12 @@ impl GroundStationApp {
 
         self.sd_viewer.init_map(root_ui.ctx());
 
+        if self.sd_viewer.replay_playing {
+            let wall_now = root_ui.ctx().input(|i| i.time);
+            self.sd_viewer.tick_replay(wall_now);
+            root_ui.ctx().request_repaint();
+        }
+
         // === DRAG & DROP ===
         let dropped_file = root_ui.ctx().input(|i| {
             i.raw.dropped_files.iter().find_map(|f| {
@@ -610,7 +616,7 @@ impl GroundStationApp {
             return;
         }
 
-        // === SD BOTTOM: Timeline scrubber ===
+        // === SD BOTTOM: Timeline scrubber + Replay controls ===
         egui::Panel::bottom("sd_scrubber")
             .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
             .show(root_ui, |ui| {
@@ -629,6 +635,57 @@ impl GroundStationApp {
                     ui.separator();
                     ui.label(format!("TICK: {}", r.tick));
                 }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    use crate::sd_viewer::state::REPLAY_SPEEDS;
+
+                    let speed = REPLAY_SPEEDS[self.sd_viewer.replay_speed_index];
+                    let speed_text = if speed == speed.floor() {
+                        format!("x{:.0}", speed)
+                    } else {
+                        format!("x{:.1}", speed)
+                    };
+                    ui.label(egui::RichText::new(speed_text)
+                        .family(egui::FontFamily::Name("Bold".into()))
+                        .size(12.0)
+                        .color(tc.accent));
+
+                    let speed_idx = self.sd_viewer.replay_speed_index;
+                    if ui.add_enabled(speed_idx < REPLAY_SPEEDS.len() - 1, egui::Button::new(
+                        egui::RichText::new("\u{23E9}").size(13.0),
+                    )).on_hover_text("FASTER").clicked() {
+                        self.sd_viewer.replay_speed_index = (speed_idx + 1).min(REPLAY_SPEEDS.len() - 1);
+                    }
+
+                    if ui.button(egui::RichText::new("\u{23F9}").size(13.0))
+                        .on_hover_text("STOP")
+                        .clicked()
+                    {
+                        self.sd_viewer.replay_playing = false;
+                        self.sd_viewer.replay_last_wall = None;
+                        self.sd_viewer.selected_index = 0;
+                    }
+
+                    let play_label = if self.sd_viewer.replay_playing { "\u{23F8}" } else { "\u{25B6}" };
+                    if ui.button(egui::RichText::new(play_label).size(13.0))
+                        .on_hover_text(if self.sd_viewer.replay_playing { "PAUSE" } else { "PLAY" })
+                        .clicked()
+                    {
+                        self.sd_viewer.replay_playing = !self.sd_viewer.replay_playing;
+                        if self.sd_viewer.replay_playing {
+                            self.sd_viewer.replay_last_wall = None;
+                            if self.sd_viewer.selected_index >= self.sd_viewer.records.len().saturating_sub(1) {
+                                self.sd_viewer.selected_index = 0;
+                            }
+                        }
+                    }
+
+                    if ui.add_enabled(speed_idx > 0, egui::Button::new(
+                        egui::RichText::new("\u{23EA}").size(13.0),
+                    )).on_hover_text("SLOWER").clicked() {
+                        self.sd_viewer.replay_speed_index = speed_idx.saturating_sub(1);
+                    }
+                });
             });
         });
 
@@ -658,9 +715,14 @@ impl GroundStationApp {
                             });
                         });
                         ui.add_space(4.0);
+                        let partial_trail: std::collections::VecDeque<(f64, f64)> = self.sd_viewer.records[..=self.sd_viewer.selected_index]
+                            .iter()
+                            .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
+                            .map(|r| (r.latitude, r.longitude))
+                            .collect();
                         let map_rect = ui::map::gps_map(
                             ui,
-                            &self.sd_viewer.gps_trail,
+                            &partial_trail,
                             current_gps,
                             None,
                             map_state,

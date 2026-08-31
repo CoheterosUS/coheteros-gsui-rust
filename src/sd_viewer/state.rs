@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use crate::sd_log::parser::parse_sd_file;
 use crate::sd_log::record::SdRecord;
+use crate::sd_viewer::charts;
 use crate::telemetry::packet::{Command, FlightState};
 use crate::ui::map::MapState;
 
@@ -64,6 +65,8 @@ impl FlightStateExt for FlightState {
     }
 }
 
+pub const REPLAY_SPEEDS: &[f64] = &[1.0, 1.5, 2.0, 4.0];
+
 pub struct SdViewerState {
     pub records: Vec<SdRecord>,
     pub file_path: Option<String>,
@@ -89,6 +92,9 @@ pub struct SdViewerState {
     pub timeline_markers: Vec<TimelineMarker>,
     pub gps_trail: VecDeque<(f64, f64)>,
     pub map_state: Option<MapState>,
+    pub replay_playing: bool,
+    pub replay_speed_index: usize,
+    pub replay_last_wall: Option<f64>,
 }
 
 impl SdViewerState {
@@ -118,6 +124,9 @@ impl SdViewerState {
             timeline_markers: Vec::new(),
             gps_trail: VecDeque::new(),
             map_state: None,
+            replay_playing: false,
+            replay_speed_index: 0,
+            replay_last_wall: None,
         }
     }
 
@@ -276,10 +285,46 @@ impl SdViewerState {
         self.timestamps.last().unwrap() - self.timestamps.first().unwrap()
     }
 
+    pub fn tick_replay(&mut self, wall_now: f64) {
+        if !self.replay_playing || self.timestamps.len() < 2 {
+            return;
+        }
+        let last_wall = match self.replay_last_wall {
+            Some(w) => w,
+            None => {
+                self.replay_last_wall = Some(wall_now);
+                return;
+            }
+        };
+        let wall_dt = wall_now - last_wall;
+        if wall_dt <= 0.0 {
+            return;
+        }
+        self.replay_last_wall = Some(wall_now);
+
+        let current_t = self.timestamps[self.selected_index];
+        let target_t = current_t + wall_dt * self.replay_speed();
+        let new_index = charts::timestamp_to_index(&self.timestamps, target_t);
+
+        if new_index >= self.timestamps.len().saturating_sub(1) {
+            self.selected_index = self.timestamps.len().saturating_sub(1);
+            self.replay_playing = false;
+            self.replay_last_wall = None;
+        } else {
+            self.selected_index = new_index;
+        }
+    }
+
+    pub fn replay_speed(&self) -> f64 {
+        REPLAY_SPEEDS[self.replay_speed_index]
+    }
+
     pub fn close_file(&mut self) {
         self.records.clear();
         self.file_path = None;
         self.error = None;
+        self.replay_playing = false;
+        self.replay_last_wall = None;
         self.clear_series();
     }
 
