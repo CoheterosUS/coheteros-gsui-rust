@@ -173,32 +173,26 @@ Command `0x10` (COMMAND_HIL_DATA). Received over UART from external device (Lapt
 |--------|------|--------|------------------|-------------------|
 | 0      | 2    | uint16 | Sync             | `0xCAFE`          |
 | 2      | 4    | uint32 | Tick             | Raw               |
-| 6      | 4    | int32  | AccelX           | ×100              |
-| 10     | 4    | int32  | AccelY           | ×100              |
-| 14     | 4    | int32  | AccelZ           | ×100              |
-| 18     | 4    | int32  | GyroX            | ×100              |
-| 22     | 4    | int32  | GyroY            | ×100              |
-| 26     | 4    | int32  | GyroZ            | ×100              |
-| 30     | 4    | int32  | MagX             | ×100              |
-| 34     | 4    | int32  | MagY             | ×100              |
-| 38     | 4    | int32  | MagZ             | ×100              |
-| 42     | 4    | int32  | PressurePa       | ×100              |
-| 46     | 4    | int32  | TemperatureC     | ×100              |
-| 50     | 4    | int32  | Latitude         | ×10^7             |
-| 54     | 4    | int32  | Longitude        | ×10^7             |
-| 58     | 4    | int32  | GPSAltitude      | ×100              |
-| 62     | 1    | uint8  | Satellites       | Raw               |
-| 63     | 4    | int32  | BaroAltitude     | ×100              |
-| 67     | 4    | int32  | BaroVelocity     | ×100              |
-| 71     | 4    | int32  | VelX             | ×100              |
-| 75     | 4    | int32  | VelY             | ×100              |
-| 79     | 4    | int32  | VelZ             | ×100              |
-| 83     | 4    | uint32 | Flags            | Bitmask           |
-| 87     | 4    | int32  | BatteryVoltage   | ×100              |
-| 91     | 1    | uint8  | State            | Enum              |
-| 92     | 1    | uint8  | RelayState       | Bitmask           |
-| 93     | 1    | uint8  | LastCommand      | Enum              |
-| 94     | 1    | uint8  | SyncEnd          | `0xBE`            |
+| 6      | 2    | int16  | AccelX           | Truncated         |
+| 8      | 2    | int16  | AccelY           | Truncated         |
+| 10     | 2    | int16  | AccelZ           | Truncated         |
+| 12     | 2    | int16  | GyroX            | Truncated         |
+| 14     | 2    | int16  | GyroY            | Truncated         |
+| 16     | 2    | int16  | GyroZ            | Truncated         |
+| 18     | 2    | int16  | PressurePa       | ÷10               |
+| 20     | 1    | int8   | TemperatureC     | Truncated         |
+| 21     | 4    | int32  | Latitude         | ×10^7             |
+| 25     | 4    | int32  | Longitude        | ×10^7             |
+| 29     | 4    | int32  | GPSAltitude      | ×100              |
+| 33     | 1    | uint8  | Satellites       | Raw               |
+| 34     | 4    | int32  | BaroAltitude     | ×100              |
+| 38     | 4    | int32  | BaroVelocity     | ×100              |
+| 42     | 4    | uint32 | Flags            | Bitmask           |
+| 46     | 2    | int16  | BatteryVoltage   | ×10               |
+| 48     | 1    | uint8  | State            | Enum              |
+| 49     | 1    | uint8  | RelayState       | Bitmask           |
+| 50     | 1    | uint8  | LastCommand      | Enum              |
+| 51     | 1    | uint8  | SyncEnd          | `0xBE`            |
 
 ## Wire SD Log Record (Structure, Packed)
 
