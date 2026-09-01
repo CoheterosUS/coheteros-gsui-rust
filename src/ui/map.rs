@@ -76,7 +76,7 @@ pub fn gps_map(
         my_pos,
     )
     .show(&mut child_ui, |ui, _response, projector, _memory| {
-        let painter = ui.painter();
+        let painter = ui.painter_at(rect);
         let to_pos = |v: egui::Vec2| egui::pos2(v.x, v.y);
 
         if trail.len() >= 2 {
