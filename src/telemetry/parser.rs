@@ -33,6 +33,18 @@ impl<'a> PacketReader<'a> {
         v
     }
 
+    fn i8(&mut self) -> i8 {
+        let v = self.buf[self.pos] as i8;
+        self.pos += 1;
+        v
+    }
+
+    fn i16_le(&mut self) -> i16 {
+        let v = i16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
+        self.pos += 2;
+        v
+    }
+
     fn i32_le(&mut self) -> i32 {
         let v = i32::from_le_bytes([
             self.buf[self.pos],
@@ -65,20 +77,18 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
     }
 
     let tick = r.u32_le();
-    let accel = [r.scaled(), r.scaled(), r.scaled()];
-    let gyro = [r.scaled(), r.scaled(), r.scaled()];
-    let mag = [r.scaled(), r.scaled(), r.scaled()];
-    let pressure_pa = r.scaled();
-    let temperature_c = r.scaled();
+    let accel = [r.i16_le() as f64, r.i16_le() as f64, r.i16_le() as f64];
+    let gyro = [r.i16_le() as f64, r.i16_le() as f64, r.i16_le() as f64];
+    let pressure_pa = r.i16_le() as f64 * PRESSURE_SCALE;
+    let temperature_c = r.i8() as f64;
     let latitude = r.gps_scaled();
     let longitude = r.gps_scaled();
     let gps_altitude = r.scaled();
     let satellites = r.u8();
     let baro_altitude = r.scaled();
     let baro_velocity = r.scaled();
-    let velocity = [r.scaled(), r.scaled(), r.scaled()];
     let flags = r.u32_le();
-    let battery_voltage = r.scaled();
+    let battery_voltage = r.i16_le() as f64 / BATTERY_SCALE;
     let state = FlightState::from_u8(r.u8())?;
     let relay = RelayState::from_u8(r.u8());
     let last_command = Command::from_u8(r.u8()).unwrap_or(Command::None);
@@ -88,7 +98,6 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
         tick,
         accel,
         gyro,
-        mag,
         pressure_pa,
         temperature_c,
         latitude,
@@ -97,7 +106,6 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
         satellites,
         baro_altitude,
         baro_velocity,
-        velocity,
         flags,
         battery_voltage,
         state,
@@ -162,11 +170,10 @@ mod tests {
         buf[0] = 0xFE;
         buf[1] = 0xCA;
         buf[2..6].copy_from_slice(&1000u32.to_le_bytes());
-        // accel_x = 9.81 * 100 = 981
-        buf[6..10].copy_from_slice(&981i32.to_le_bytes());
-        buf[91] = 0;
-        buf[92] = 0;
-        buf[93] = 0;
+        buf[6..8].copy_from_slice(&9i16.to_le_bytes());
+        buf[48] = 0;
+        buf[49] = 0;
+        buf[50] = 0;
         buf[PACKET_SIZE - 1] = SYNC_END;
         buf
     }
@@ -176,7 +183,7 @@ mod tests {
         let buf = make_test_packet();
         let t = parse_packet(&buf).unwrap();
         assert_eq!(t.tick, 1000);
-        assert!((t.accel[0] - 9.81).abs() < 0.01);
+        assert!((t.accel[0] - 9.0).abs() < 0.01);
         assert_eq!(t.state, FlightState::Idle);
     }
 

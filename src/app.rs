@@ -383,7 +383,7 @@ impl GroundStationApp {
 
         // === CENTER: Data grid (sticky) + Charts (scrollable) ===
         egui::CentralPanel::default().show(root_ui, |ui| {
-            ui.columns(4, |cols| {
+            ui.columns(3, |cols| {
                     theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "TICK", &format!("{}", t.tick), dm);
@@ -404,15 +404,7 @@ impl GroundStationApp {
                         }
                     });
 
-                    theme::bordered_section(&mut cols[2], "VELOCITY", tc.accent, dm, |ui| {
-                        if let Some(ref t) = t {
-                            theme::data_row(ui, "VELOCITY X", &format!("{:.2} m/s", t.velocity[0]), dm);
-                            theme::data_row(ui, "VELOCITY Y", &format!("{:.2} m/s", t.velocity[1]), dm);
-                            theme::data_row(ui, "VELOCITY Z", &format!("{:.2} m/s", t.velocity[2]), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[3], "POSITION", tc.accent, dm, |ui| {
+                    theme::bordered_section(&mut cols[2], "POSITION", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", t.gps_altitude), dm);
                             theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", t.latitude), dm);
@@ -424,7 +416,7 @@ impl GroundStationApp {
 
                 ui.add_space(4.0);
 
-                ui.columns(4, |cols| {
+                ui.columns(3, |cols| {
                     theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
                         if let Some(ref t) = t {
                             let fault_list = [
@@ -441,15 +433,7 @@ impl GroundStationApp {
                         }
                     });
 
-                    theme::bordered_section(&mut cols[1], "MAGNETOMETER", tc.accent, dm, |ui| {
-                        if let Some(ref t) = t {
-                            theme::data_row(ui, "MAG X", &format!("{:.2} mG", t.mag[0]), dm);
-                            theme::data_row(ui, "MAG Y", &format!("{:.2} mG", t.mag[1]), dm);
-                            theme::data_row(ui, "MAG Z", &format!("{:.2} mG", t.mag[2]), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[2], "ACCELERATION", tc.accent, dm, |ui| {
+                    theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", t.accel[0]), dm);
                             theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", t.accel[1]), dm);
@@ -457,7 +441,7 @@ impl GroundStationApp {
                         }
                     });
 
-                    theme::bordered_section(&mut cols[3], "GYROSCOPE", tc.accent, dm, |ui| {
+                    theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", t.gyro[0]), dm);
                             theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", t.gyro[1]), dm);

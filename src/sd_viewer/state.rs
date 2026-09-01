@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::sd_log::parser::parse_sd_file;
-use crate::sd_log::record::SdRecord;
+use crate::sd_log::record::{SdRecord, TICK_RATE_HZ};
 use crate::sd_viewer::charts;
 use crate::telemetry::packet::{Command, FlightState};
 use crate::ui::map::MapState;
@@ -180,7 +180,7 @@ impl SdViewerState {
         self.battery.reserve(count);
 
         for r in records {
-            self.timestamps.push(r.wall_clock_secs());
+            self.timestamps.push(r.tick as f64 / TICK_RATE_HZ);
             self.accel_x.push(r.accel[0]);
             self.accel_y.push(r.accel[1]);
             self.accel_z.push(r.accel[2]);
@@ -201,10 +201,10 @@ impl SdViewerState {
         if records.is_empty() {
             return;
         }
-        let mut seg_start = records[0].wall_clock_secs();
+        let mut seg_start = records[0].tick as f64 / TICK_RATE_HZ;
         let mut seg_state = records[0].state;
         for r in &records[1..] {
-            let ts = r.wall_clock_secs();
+            let ts = r.tick as f64 / TICK_RATE_HZ;
             if r.state != seg_state {
                 self.state_segments.push(StateSegment {
                     start: seg_start,
@@ -218,7 +218,7 @@ impl SdViewerState {
         }
         self.state_segments.push(StateSegment {
             start: seg_start,
-            end: records.last().unwrap().wall_clock_secs(),
+            end: records.last().unwrap().tick as f64 / TICK_RATE_HZ,
             state: seg_state,
             color: seg_state.timeline_color(),
         });
@@ -228,7 +228,7 @@ impl SdViewerState {
         let mut prev_drogue = false;
         let mut prev_chute = false;
         for r in records {
-            let ts = r.wall_clock_secs();
+            let ts = r.tick as f64 / TICK_RATE_HZ;
             if r.relay.drogue_fired && !prev_drogue {
                 self.timeline_markers.push(TimelineMarker {
                     timestamp: ts,
@@ -254,7 +254,7 @@ impl SdViewerState {
         let mut prev_cmd = Command::None;
         for r in records {
             if r.last_command != prev_cmd && r.last_command != Command::None {
-                let ts = r.wall_clock_secs();
+                let ts = r.tick as f64 / TICK_RATE_HZ;
                 let (label, color) = match r.last_command {
                     Command::Reset => ("CMD: RESET", egui::Color32::from_rgb(200, 100, 200)),
                     Command::GroundAbort => ("CMD: GROUND ABORT", egui::Color32::from_rgb(255, 50, 50)),

@@ -1,10 +1,12 @@
 use std::fmt;
 
-pub const PACKET_SIZE: usize = 95;
+pub const PACKET_SIZE: usize = 52;
 pub const SYNC_WORD: u16 = 0xCAFE;
 pub const SYNC_END: u8 = 0xBE;
 pub const SCALE: f64 = 100.0;
 pub const GPS_SCALE: f64 = 10_000_000.0;
+pub const PRESSURE_SCALE: f64 = 10.0;
+pub const BATTERY_SCALE: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -158,32 +160,26 @@ pub struct PacketField {
 pub const PACKET_FIELDS: &[PacketField] = &[
     PacketField { name: "SYNC",      offset: 0,  length: 2, color: [255, 255, 255] },
     PacketField { name: "TICK",      offset: 2,  length: 4, color: [100, 200, 255] },
-    PacketField { name: "ACCEL X",   offset: 6,  length: 4, color: [255, 100, 100] },
-    PacketField { name: "ACCEL Y",   offset: 10, length: 4, color: [255, 130, 100] },
-    PacketField { name: "ACCEL Z",   offset: 14, length: 4, color: [255, 160, 100] },
-    PacketField { name: "GYRO X",    offset: 18, length: 4, color: [100, 255, 100] },
-    PacketField { name: "GYRO Y",    offset: 22, length: 4, color: [130, 255, 100] },
-    PacketField { name: "GYRO Z",    offset: 26, length: 4, color: [160, 255, 100] },
-    PacketField { name: "MAG X",     offset: 30, length: 4, color: [200, 100, 255] },
-    PacketField { name: "MAG Y",     offset: 34, length: 4, color: [220, 130, 255] },
-    PacketField { name: "MAG Z",     offset: 38, length: 4, color: [240, 160, 255] },
-    PacketField { name: "PRESSURE",  offset: 42, length: 4, color: [255, 200, 50] },
-    PacketField { name: "TEMP",      offset: 46, length: 4, color: [255, 150, 50] },
-    PacketField { name: "LAT",       offset: 50, length: 4, color: [50, 200, 200] },
-    PacketField { name: "LON",       offset: 54, length: 4, color: [80, 220, 200] },
-    PacketField { name: "GPS ALT",   offset: 58, length: 4, color: [110, 240, 200] },
-    PacketField { name: "SATS",      offset: 62, length: 1, color: [140, 255, 200] },
-    PacketField { name: "BARO ALT",  offset: 63, length: 4, color: [255, 100, 200] },
-    PacketField { name: "BARO VEL",  offset: 67, length: 4, color: [255, 130, 220] },
-    PacketField { name: "VEL X",     offset: 71, length: 4, color: [200, 200, 100] },
-    PacketField { name: "VEL Y",     offset: 75, length: 4, color: [220, 220, 100] },
-    PacketField { name: "VEL Z",     offset: 79, length: 4, color: [240, 240, 100] },
-    PacketField { name: "FLAGS",     offset: 83, length: 4, color: [255, 80, 80] },
-    PacketField { name: "BATTERY",   offset: 87, length: 4, color: [255, 255, 0] },
-    PacketField { name: "STATE",     offset: 91, length: 1, color: [0, 200, 255] },
-    PacketField { name: "RELAY",     offset: 92, length: 1, color: [255, 165, 0] },
-    PacketField { name: "CMD",       offset: 93, length: 1, color: [180, 180, 255] },
-    PacketField { name: "SYNC END",  offset: 94, length: 1, color: [255, 255, 255] },
+    PacketField { name: "ACCEL X",   offset: 6,  length: 2, color: [255, 100, 100] },
+    PacketField { name: "ACCEL Y",   offset: 8,  length: 2, color: [255, 130, 100] },
+    PacketField { name: "ACCEL Z",   offset: 10, length: 2, color: [255, 160, 100] },
+    PacketField { name: "GYRO X",    offset: 12, length: 2, color: [100, 255, 100] },
+    PacketField { name: "GYRO Y",    offset: 14, length: 2, color: [130, 255, 100] },
+    PacketField { name: "GYRO Z",    offset: 16, length: 2, color: [160, 255, 100] },
+    PacketField { name: "PRESSURE",  offset: 18, length: 2, color: [255, 200, 50] },
+    PacketField { name: "TEMP",      offset: 20, length: 1, color: [255, 150, 50] },
+    PacketField { name: "LAT",       offset: 21, length: 4, color: [50, 200, 200] },
+    PacketField { name: "LON",       offset: 25, length: 4, color: [80, 220, 200] },
+    PacketField { name: "GPS ALT",   offset: 29, length: 4, color: [110, 240, 200] },
+    PacketField { name: "SATS",      offset: 33, length: 1, color: [140, 255, 200] },
+    PacketField { name: "BARO ALT",  offset: 34, length: 4, color: [255, 100, 200] },
+    PacketField { name: "BARO VEL",  offset: 38, length: 4, color: [255, 130, 220] },
+    PacketField { name: "FLAGS",     offset: 42, length: 4, color: [255, 80, 80] },
+    PacketField { name: "BATTERY",   offset: 46, length: 2, color: [255, 255, 0] },
+    PacketField { name: "STATE",     offset: 48, length: 1, color: [0, 200, 255] },
+    PacketField { name: "RELAY",     offset: 49, length: 1, color: [255, 165, 0] },
+    PacketField { name: "CMD",       offset: 50, length: 1, color: [180, 180, 255] },
+    PacketField { name: "SYNC END",  offset: 51, length: 1, color: [255, 255, 255] },
 ];
 
 #[derive(Debug, Clone)]
@@ -192,7 +188,6 @@ pub struct Telemetry {
     pub tick: u32,
     pub accel: [f64; 3],
     pub gyro: [f64; 3],
-    pub mag: [f64; 3],
     pub pressure_pa: f64,
     pub temperature_c: f64,
     pub latitude: f64,
@@ -201,7 +196,6 @@ pub struct Telemetry {
     pub satellites: u8,
     pub baro_altitude: f64,
     pub baro_velocity: f64,
-    pub velocity: [f64; 3],
     pub flags: u32,
     pub battery_voltage: f64,
     pub state: FlightState,
@@ -216,12 +210,10 @@ impl Telemetry {
             "tick",
             "accel_x", "accel_y", "accel_z",
             "gyro_x", "gyro_y", "gyro_z",
-            "mag_x", "mag_y", "mag_z",
             "pressure_pa", "temperature_c",
             "latitude", "longitude", "gps_altitude",
             "satellites",
             "baro_altitude", "baro_velocity",
-            "velocity_x", "velocity_y", "velocity_z",
             "flags", "battery_voltage",
             "state", "relay", "last_command",
         ]
@@ -233,12 +225,10 @@ impl Telemetry {
             self.tick.to_string(),
             self.accel[0].to_string(), self.accel[1].to_string(), self.accel[2].to_string(),
             self.gyro[0].to_string(), self.gyro[1].to_string(), self.gyro[2].to_string(),
-            self.mag[0].to_string(), self.mag[1].to_string(), self.mag[2].to_string(),
             self.pressure_pa.to_string(), self.temperature_c.to_string(),
             self.latitude.to_string(), self.longitude.to_string(), self.gps_altitude.to_string(),
             self.satellites.to_string(),
             self.baro_altitude.to_string(), self.baro_velocity.to_string(),
-            self.velocity[0].to_string(), self.velocity[1].to_string(), self.velocity[2].to_string(),
             self.flags.to_string(), self.battery_voltage.to_string(),
             (self.state as u8).to_string(),
             (self.relay.drogue_fired as u8 | ((self.relay.parachute_fired as u8) << 1)).to_string(),

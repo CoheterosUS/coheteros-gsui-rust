@@ -4,6 +4,7 @@ pub const SD_RECORD_SIZE: usize = 81;
 pub const SD_SYNC_WORD: u16 = 0xCAFE;
 pub const SD_SYNC_END: u8 = 0xBE;
 pub const GPS_SCALE: f64 = 10_000_000.0;
+pub const TICK_RATE_HZ: f64 = 1000.0;
 
 #[derive(Debug, Clone)]
 pub struct SdRecord {
@@ -25,12 +26,6 @@ pub struct SdRecord {
     pub state: FlightState,
     pub relay: RelayState,
     pub last_command: Command,
-}
-
-impl SdRecord {
-    pub fn wall_clock_secs(&self) -> f64 {
-        self.unix_time as f64 + self.milliseconds as f64 / 1000.0
-    }
 }
 
 pub const SD_RECORD_FIELDS: &[PacketField] = &[
