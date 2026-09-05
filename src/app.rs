@@ -75,27 +75,30 @@ impl GroundStationApp {
             .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
             .show(root_ui, |ui| {
             ui.horizontal_centered(|ui| {
-                egui::ComboBox::from_id_salt("port_combo")
-                    .selected_text(if self.state.selected_port.is_empty() {
-                        "PORT"
-                    } else {
-                        self.state.selected_port.as_str()
-                    })
-                    .width(90.0)
-                    .show_ui(ui, |ui| {
-                        for p in &self.state.available_ports {
-                            ui.selectable_value(&mut self.state.selected_port, p.clone(), p);
-                        }
-                    });
+                let no_ports = self.state.available_ports.is_empty();
+                ui.add_enabled_ui(!no_ports, |ui| {
+                    egui::ComboBox::from_id_salt("port_combo")
+                        .selected_text(if self.state.selected_port.is_empty() {
+                            "PORT"
+                        } else {
+                            self.state.selected_port.as_str()
+                        })
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            for p in &self.state.available_ports {
+                                ui.selectable_value(&mut self.state.selected_port, p.clone(), p);
+                            }
+                        });
 
-                egui::ComboBox::from_id_salt("baud_combo")
-                    .selected_text(format!("{}", self.state.selected_baud))
-                    .width(70.0)
-                    .show_ui(ui, |ui| {
-                        for &rate in &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
-                            ui.selectable_value(&mut self.state.selected_baud, rate, format!("{}", rate));
-                        }
-                    });
+                    egui::ComboBox::from_id_salt("baud_combo")
+                        .selected_text(format!("{}", self.state.selected_baud))
+                        .width(70.0)
+                        .show_ui(ui, |ui| {
+                            for &rate in &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
+                                ui.selectable_value(&mut self.state.selected_baud, rate, format!("{}", rate));
+                            }
+                        });
+                });
 
                 if self.state.connected {
                     if ui.button("DISCONNECT").clicked() {
