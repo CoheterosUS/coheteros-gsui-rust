@@ -201,8 +201,8 @@ impl GroundStationApp {
                 if let Some(ref t) = t {
                     let state_color = match t.state {
                         FlightState::Idle => egui::Color32::GRAY,
-                        FlightState::Burn => egui::Color32::ORANGE,
-                        FlightState::Apogee | FlightState::Parachute => tc.green,
+                        FlightState::Boost => egui::Color32::ORANGE,
+                        FlightState::Apogee | FlightState::MainParachute => tc.green,
                         FlightState::GroundAbort | FlightState::DescentAbort => tc.red_accent,
                         _ => tc.yellow,
                     };
