@@ -173,6 +173,39 @@ impl AppState {
         self.console.push_back(entry);
     }
 
+    pub fn clear_data(&mut self) {
+        self.latest = None;
+        self.baro_altitude.clear();
+        self.gps_altitude.clear();
+        self.baro_velocity.clear();
+        self.accel_x.clear();
+        self.accel_y.clear();
+        self.accel_z.clear();
+        self.gyro_x.clear();
+        self.gyro_y.clear();
+        self.gyro_z.clear();
+        self.gps_trail.clear();
+        self.packet_count = 0;
+        self.bytes_received = 0;
+        self.throughput_kbps = 0.0;
+        self.packets_per_sec = 0.0;
+        self.throughput_bytes_window = 0;
+        self.throughput_packets_window = 0;
+        self.throughput_last_update = Instant::now();
+        self.max_baro_altitude = f64::NEG_INFINITY;
+        self.max_gps_altitude = f64::NEG_INFINITY;
+        self.max_baro_velocity = f64::NEG_INFINITY;
+        self.max_accel_magnitude = 0.0;
+        self.max_temperature = f64::NEG_INFINITY;
+        self.min_temperature = f64::INFINITY;
+        self.min_battery_voltage = f64::INFINITY;
+        self.max_battery_voltage = f64::NEG_INFINITY;
+        self.extremes_initialized = false;
+        self.console.clear();
+        self.last_flight_state = None;
+        self.session_start = Instant::now();
+    }
+
     pub fn push_message(&mut self, text: &str) {
         self.push_console(ConsoleEntry::Message {
             text: text.to_uppercase(),

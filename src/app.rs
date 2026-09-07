@@ -120,10 +120,14 @@ impl GroundStationApp {
                     .selected_text(format!("{}", self.state.expected_packet_rate))
                     .width(50.0)
                     .show_ui(ui, |ui| {
-                        for &rate in &[10, 20, 25, 50, 100, 200] {
+                        for &rate in &[1, 10, 20, 25, 50, 100, 200] {
                             ui.selectable_value(&mut self.state.expected_packet_rate, rate, format!("{}", rate));
                         }
                     });
+
+                if ui.button("CLEAR").clicked() {
+                    self.state.clear_data();
+                }
 
                 if let Some(ref t) = t {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
