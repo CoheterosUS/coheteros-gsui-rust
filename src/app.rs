@@ -362,7 +362,12 @@ impl GroundStationApp {
                         let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
 
                         let painter = ui.painter();
-                        painter.rect_filled(overlay_rect, 2.0, egui::Color32::from_black_alpha(220));
+                        let overlay_bg = if dm {
+                            egui::Color32::from_black_alpha(220)
+                        } else {
+                            egui::Color32::from_white_alpha(220)
+                        };
+                        painter.rect_filled(overlay_rect, 2.0, overlay_bg);
 
                         let s = 14.0;
                         let mut y = overlay_rect.top() + 5.0;
@@ -729,7 +734,12 @@ impl GroundStationApp {
                             let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
 
                             let painter = ui.painter();
-                            painter.rect_filled(overlay_rect, 2.0, egui::Color32::from_black_alpha(220));
+                            let overlay_bg = if dm {
+                                egui::Color32::from_black_alpha(220)
+                            } else {
+                                egui::Color32::from_white_alpha(220)
+                            };
+                            painter.rect_filled(overlay_rect, 2.0, overlay_bg);
 
                             let s = 14.0;
                             let mut y = overlay_rect.top() + 5.0;
@@ -971,6 +981,7 @@ impl eframe::App for GroundStationApp {
         }
 
         // === ABOUT WINDOW ===
+        let mut close_about = false;
         egui::Window::new("About")
             .open(&mut self.show_about)
             .collapsible(false)
@@ -994,10 +1005,70 @@ impl eframe::App for GroundStationApp {
                     ui.hyperlink_to(egui::RichText::new("coheteros.com").size(14.0).color(link_color), "https://coheteros.com");
                     ui.hyperlink_to(egui::RichText::new("LinkedIn").size(14.0).color(link_color), "https://www.linkedin.com/company/coheteros-us/");
                     ui.hyperlink_to(egui::RichText::new("GitHub").size(14.0).color(link_color), "https://github.com/CoheterosUS");
+                    ui.add_space(16.0);
+                    if ui.button(egui::RichText::new("LOAD DEMO DATA").size(13.0).family(egui::FontFamily::Name("Bold".into()))).clicked() {
+                        close_about = true;
+                    }
                     ui.add_space(24.0);
                     ui.label(egui::RichText::new("ANGELO WAS HERE").size(9.0).color(tc.label_color.gamma_multiply(0.3)));
                 });
             });
+        if close_about {
+            let n = 200;
+            let base_lat = 37.3891;
+            let base_lon = -5.9845;
+            let base_alt = 15.0;
+            for i in 0..n {
+                let t_frac = i as f64 / n as f64;
+                let alt = if t_frac < 0.4 {
+                    base_alt + (t_frac / 0.4) * 850.0
+                } else if t_frac < 0.5 {
+                    base_alt + 850.0 - ((t_frac - 0.4) / 0.1) * 30.0
+                } else {
+                    base_alt + 820.0 - ((t_frac - 0.5) / 0.5) * 800.0
+                };
+                let vel = if t_frac < 0.4 { 180.0 * (1.0 - t_frac / 0.4) + 20.0 }
+                    else if t_frac < 0.5 { -5.0 }
+                    else { -30.0 - 50.0 * ((t_frac - 0.5) / 0.5) };
+                let state = if t_frac < 0.05 { FlightState::Prelaunch }
+                    else if t_frac < 0.15 { FlightState::Boost }
+                    else if t_frac < 0.4 { FlightState::Coast }
+                    else if t_frac < 0.5 { FlightState::Apogee }
+                    else { FlightState::MainParachute };
+                let ax = if t_frac < 0.15 { 45.0 * (1.0 - t_frac / 0.15) } else { 0.3 * (t_frac * 47.0).sin() };
+                let ay = 0.5 * (t_frac * 31.0).cos();
+                let az = if t_frac < 0.15 { 9.81 + 45.0 * (1.0 - t_frac / 0.15) } else { 9.81 + 0.2 * (t_frac * 53.0).sin() };
+                let gx = 15.0 * (t_frac * 19.0).sin();
+                let gy = 10.0 * (t_frac * 23.0).cos();
+                let gz = 5.0 * (t_frac * 37.0).sin();
+                let drift = t_frac * 0.002;
+                self.state.push_telemetry(packet::Telemetry {
+                    raw: [0u8; packet::PACKET_SIZE],
+                    tick: (i as u32) * 100,
+                    accel: [ax, ay, az],
+                    gyro: [gx, gy, gz],
+                    pressure_pa: 101325.0 - alt * 12.0,
+                    temperature_c: 27.0 - alt * 0.0065,
+                    latitude: base_lat + drift,
+                    longitude: base_lon + drift * 0.7,
+                    gps_altitude: alt + 2.0 * (t_frac * 41.0).sin(),
+                    satellites: 12,
+                    baro_altitude: alt,
+                    baro_velocity: vel,
+                    flags: 0,
+                    battery_voltage: 4.05 - t_frac * 0.25,
+                    state,
+                    relay: packet::RelayState { drogue_fired: t_frac > 0.5, parachute_fired: false },
+                    last_command: Command::Calibration,
+                });
+            }
+            self.state.connected = true;
+            self.state.packet_count = n as u64;
+            self.state.throughput_kbps = 648.0;
+            self.state.packets_per_sec = 10.0;
+            self.state.expected_packet_rate = 10;
+            self.show_about = false;
+        }
 
         // === TAB BAR ===
         egui::Panel::top("tab_bar")
