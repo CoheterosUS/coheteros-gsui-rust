@@ -805,6 +805,11 @@ impl GroundStationApp {
                     theme::bordered_section(&mut cols[1], "POSITION", tc.accent, dm, |ui| {
                         if let Some(ref r) = r {
                             theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", r.gps_altitude), dm);
+                            let idx = self.sd_viewer.selected_index;
+                            let baro_alt = self.sd_viewer.baro_altitude.get(idx).copied().unwrap_or(0.0);
+                            let baro_vel = self.sd_viewer.baro_velocity.get(idx).copied().unwrap_or(0.0);
+                            theme::data_row(ui, "BARO ALT", &format!("{:.2} m", baro_alt), dm);
+                            theme::data_row(ui, "BARO VEL", &format!("{:.2} m/s", baro_vel), dm);
                             theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", r.latitude), dm);
                             theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", r.longitude), dm);
                             theme::data_row(ui, "SATELLITES", &format!("{}", r.satellites), dm);
@@ -912,6 +917,18 @@ impl GroundStationApp {
                     }
                 });
                 ui.add_space(4.0);
+                theme::bordered_section(ui, "BARO ALTITUDE", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_alt", "BARO ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.baro_altitude, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "BARO VELOCITY", tc.accent, dm, |ui| {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &self.sd_viewer.timestamps, &self.sd_viewer.baro_velocity, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                });
+                ui.add_space(4.0);
                 theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
                     if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
@@ -964,13 +981,22 @@ impl GroundStationApp {
         if let Some(ref label) = self.sd_viewer.bg_label.clone() {
             let frac = self.sd_viewer.progress_fraction();
             let pct = (frac * 100.0) as u32;
+            let current = self.sd_viewer.progress_current();
+            let total = self.sd_viewer.bg_total;
+            let eta_text = match self.sd_viewer.progress_eta_secs() {
+                Some(secs) if secs >= 60.0 => format!(" — ETA {}m{:02}s", secs as u64 / 60, secs as u64 % 60),
+                Some(secs) => format!(" — ETA {:.0}s", secs),
+                None => String::new(),
+            };
             egui::Window::new(label.as_str())
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(root_ui.ctx(), |ui| {
-                    ui.set_min_width(250.0);
-                    ui.add(egui::ProgressBar::new(frac).text(format!("{}%", pct)));
+                    ui.set_min_width(300.0);
+                    ui.add(egui::ProgressBar::new(frac).text(format!(
+                        "{} / {} ({}%){}", current, total, pct, eta_text
+                    )));
                 });
         }
 

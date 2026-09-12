@@ -3,6 +3,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::sd_log::parser::parse_sd_file_with_progress;
 use crate::sd_log::record::{SdRecord, TICK_RATE_HZ};
@@ -98,6 +99,8 @@ pub struct SdViewerState {
     pub pressure: Vec<f64>,
     pub temperature: Vec<f64>,
     pub battery: Vec<f64>,
+    pub baro_altitude: Vec<f64>,
+    pub baro_velocity: Vec<f64>,
     pub state_segments: Vec<StateSegment>,
     pub timeline_markers: Vec<TimelineMarker>,
     pub gps_trail: VecDeque<(f64, f64)>,
@@ -111,6 +114,7 @@ pub struct SdViewerState {
     pub bg_total: usize,
     pub status_message: Option<String>,
     pub last_export_dir: Option<String>,
+    pub bg_start_time: Option<Instant>,
 }
 
 impl SdViewerState {
@@ -136,6 +140,8 @@ impl SdViewerState {
             pressure: Vec::new(),
             temperature: Vec::new(),
             battery: Vec::new(),
+            baro_altitude: Vec::new(),
+            baro_velocity: Vec::new(),
             state_segments: Vec::new(),
             timeline_markers: Vec::new(),
             gps_trail: VecDeque::new(),
@@ -149,6 +155,7 @@ impl SdViewerState {
             bg_total: 0,
             status_message: None,
             last_export_dir: None,
+            bg_start_time: None,
         }
     }
 
@@ -163,6 +170,7 @@ impl SdViewerState {
         self.records.clear();
         self.clear_series();
         self.bg_label = Some("LOADING".to_string());
+        self.bg_start_time = Some(Instant::now());
 
         self.bg_total = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let progress = Arc::new(AtomicUsize::new(0));
@@ -202,6 +210,7 @@ impl SdViewerState {
     pub fn start_export(&mut self, path: &str) {
         self.error = None;
         self.bg_label = Some("EXPORTING".to_string());
+        self.bg_start_time = Some(Instant::now());
         self.bg_total = self.records.len();
         let progress = Arc::new(AtomicUsize::new(0));
         self.bg_progress = Some(Arc::clone(&progress));
@@ -230,6 +239,7 @@ impl SdViewerState {
                 self.bg_label = None;
                 self.bg_progress = None;
                 self.bg_total = 0;
+                self.bg_start_time = None;
                 match result {
                     BgTaskResult::Loaded(records, path) => self.finish_load(records, path),
                     BgTaskResult::Exported(path) => {
@@ -251,6 +261,7 @@ impl SdViewerState {
                 self.bg_label = None;
                 self.bg_progress = None;
                 self.bg_total = 0;
+                self.bg_start_time = None;
                 self.error = Some("BACKGROUND TASK FAILED".to_string());
                 false
             }
@@ -270,6 +281,20 @@ impl SdViewerState {
         }
     }
 
+    pub fn progress_current(&self) -> usize {
+        self.bg_progress.as_ref().map_or(0, |p| p.load(Ordering::Relaxed))
+    }
+
+    pub fn progress_eta_secs(&self) -> Option<f64> {
+        let frac = self.progress_fraction() as f64;
+        if frac <= 0.0 || frac >= 1.0 {
+            return None;
+        }
+        let elapsed = self.bg_start_time?.elapsed().as_secs_f64();
+        let total_est = elapsed / frac;
+        Some((total_est - elapsed).max(0.0))
+    }
+
     fn extract_series(&mut self, records: &[SdRecord]) {
         let count = records.len();
         self.timestamps.reserve(count);
@@ -283,6 +308,17 @@ impl SdViewerState {
         self.pressure.reserve(count);
         self.temperature.reserve(count);
         self.battery.reserve(count);
+        self.baro_altitude.reserve(count);
+        self.baro_velocity.reserve(count);
+
+        let ref_pressure = Self::compute_reference_pressure(records);
+
+        const R: f64 = 287.0;
+        const G: f64 = 9.80665;
+        const ALPHA: f64 = 0.1;
+        let mut filtered_alt: Option<f64> = None;
+        let mut prev_alt: Option<f64> = None;
+        let mut prev_tick: Option<u32> = None;
 
         for r in records {
             self.timestamps.push(r.tick as f64 / TICK_RATE_HZ);
@@ -299,6 +335,51 @@ impl SdViewerState {
             if r.latitude != 0.0 || r.longitude != 0.0 {
                 self.gps_trail.push_back((r.latitude, r.longitude));
             }
+
+            if r.pressure_pa > 0.0 && ref_pressure > 0.0 {
+                let temp_k = r.temperature_c + 273.15;
+                let raw_alt = (R * temp_k / G) * (ref_pressure / r.pressure_pa).ln();
+                let filt = match filtered_alt {
+                    Some(prev) => prev + ALPHA * (raw_alt - prev),
+                    None => raw_alt,
+                };
+                filtered_alt = Some(filt);
+
+                let vel = match (prev_alt, prev_tick) {
+                    (Some(pa), Some(pt)) => {
+                        let dt = (r.tick.wrapping_sub(pt)) as f64 / 1000.0;
+                        if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
+                    }
+                    _ => 0.0,
+                };
+                prev_alt = Some(filt);
+                prev_tick = Some(r.tick);
+
+                self.baro_altitude.push(filt);
+                self.baro_velocity.push(vel);
+            } else {
+                self.baro_altitude.push(0.0);
+                self.baro_velocity.push(0.0);
+            }
+        }
+    }
+
+    fn compute_reference_pressure(records: &[SdRecord]) -> f64 {
+        let prelaunch: Vec<f64> = records.iter()
+            .filter(|r| r.state == FlightState::Prelaunch || r.state == FlightState::Calibration)
+            .take(2000)
+            .map(|r| r.pressure_pa)
+            .filter(|&p| p > 0.0)
+            .collect();
+        if prelaunch.is_empty() {
+            records.iter()
+                .take(2000)
+                .map(|r| r.pressure_pa)
+                .filter(|&p| p > 0.0)
+                .sum::<f64>()
+                / records.iter().take(2000).filter(|r| r.pressure_pa > 0.0).count().max(1) as f64
+        } else {
+            prelaunch.iter().sum::<f64>() / prelaunch.len() as f64
         }
     }
 
@@ -447,6 +528,8 @@ impl SdViewerState {
         self.pressure.clear();
         self.temperature.clear();
         self.battery.clear();
+        self.baro_altitude.clear();
+        self.baro_velocity.clear();
         self.gps_trail.clear();
         self.selected_index = 0;
     }
@@ -455,13 +538,13 @@ impl SdViewerState {
 
 fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<AtomicUsize>>) -> Result<(), String> {
     let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
-    writeln!(file, "time_s,tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,drogue_fired,parachute_fired,last_command")
+    writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,relay,last_command")
         .map_err(|e| format!("Write error: {}", e))?;
     for (i, r) in records.iter().enumerate() {
+        let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
         writeln!(
             file,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            r.tick as f64 / TICK_RATE_HZ,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             r.tick,
             r.accel[0], r.accel[1], r.accel[2],
             r.gyro[0], r.gyro[1], r.gyro[2],
@@ -476,10 +559,9 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<At
             r.satellites,
             r.flags,
             r.battery_voltage,
-            r.state,
-            r.relay.drogue_fired,
-            r.relay.parachute_fired,
-            r.last_command,
+            r.state as u8,
+            relay_val,
+            r.last_command as u8,
         ).map_err(|e| format!("Write error: {}", e))?;
         if let Some(p) = progress {
             p.store(i + 1, Ordering::Relaxed);
