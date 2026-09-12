@@ -517,6 +517,10 @@ impl GroundStationApp {
 
         self.sd_viewer.init_map(root_ui.ctx());
 
+        if self.sd_viewer.poll_task() {
+            root_ui.ctx().request_repaint();
+        }
+
         if self.sd_viewer.replay_playing {
             let wall_now = root_ui.ctx().input(|i| i.time);
             self.sd_viewer.tick_replay(wall_now);
@@ -558,6 +562,19 @@ impl GroundStationApp {
                     if ui.button("CLOSE").clicked() {
                         self.sd_viewer.close_file();
                     }
+                    if ui.add_enabled(!self.sd_viewer.is_busy(), egui::Button::new("EXPORT CSV")).clicked() {
+                        let default_name = std::path::Path::new(path)
+                            .file_stem()
+                            .map(|s| format!("{}.csv", s.to_string_lossy()))
+                            .unwrap_or_else(|| "export.csv".to_string());
+                        if let Some(save_path) = rfd::FileDialog::new()
+                            .set_file_name(&default_name)
+                            .add_filter("CSV", &["csv"])
+                            .save_file()
+                        {
+                            self.sd_viewer.start_export(&save_path.display().to_string());
+                        }
+                    }
                     ui.separator();
                     ui.label(egui::RichText::new(path).family(egui::FontFamily::Monospace));
                     ui.separator();
@@ -573,6 +590,7 @@ impl GroundStationApp {
                     ui.separator();
                     ui.colored_label(tc.red_accent, err.as_str());
                 }
+
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let border_color = if self.sd_viewer.link_axes { tc.accent } else { tc.label_color };
@@ -942,6 +960,43 @@ impl GroundStationApp {
                 });
             }); // ScrollArea
         });
+
+        if let Some(ref label) = self.sd_viewer.bg_label.clone() {
+            let frac = self.sd_viewer.progress_fraction();
+            let pct = (frac * 100.0) as u32;
+            egui::Window::new(label.as_str())
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(root_ui.ctx(), |ui| {
+                    ui.set_min_width(250.0);
+                    ui.add(egui::ProgressBar::new(frac).text(format!("{}%", pct)));
+                });
+        }
+
+        if self.sd_viewer.status_message.is_some() {
+            let mut open = true;
+            let msg = self.sd_viewer.status_message.clone().unwrap();
+            let export_dir = self.sd_viewer.last_export_dir.clone();
+            egui::Window::new("DONE")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(root_ui.ctx(), |ui| {
+                    ui.label(egui::RichText::new(&msg).size(14.0));
+                    if let Some(ref dir) = export_dir {
+                        ui.add_space(4.0);
+                        if ui.button("OPEN DIRECTORY").clicked() {
+                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                        }
+                    }
+                });
+            if !open {
+                self.sd_viewer.status_message = None;
+                self.sd_viewer.last_export_dir = None;
+            }
+        }
     }
 }
 

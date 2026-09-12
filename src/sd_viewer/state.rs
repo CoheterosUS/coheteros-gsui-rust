@@ -1,10 +1,20 @@
 use std::collections::VecDeque;
+use std::io::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 
-use crate::sd_log::parser::parse_sd_file;
+use crate::sd_log::parser::parse_sd_file_with_progress;
 use crate::sd_log::record::{SdRecord, TICK_RATE_HZ};
 use crate::sd_viewer::charts;
 use crate::telemetry::packet::{Command, FlightState};
 use crate::ui::map::MapState;
+
+pub enum BgTaskResult {
+    Loaded(Vec<SdRecord>, String),
+    Exported(String),
+    Error(String),
+}
 
 pub struct StateSegment {
     pub start: f64,
@@ -95,6 +105,12 @@ pub struct SdViewerState {
     pub replay_playing: bool,
     pub replay_speed_index: usize,
     pub replay_last_wall: Option<f64>,
+    pub bg_receiver: Option<mpsc::Receiver<BgTaskResult>>,
+    pub bg_label: Option<String>,
+    pub bg_progress: Option<Arc<AtomicUsize>>,
+    pub bg_total: usize,
+    pub status_message: Option<String>,
+    pub last_export_dir: Option<String>,
 }
 
 impl SdViewerState {
@@ -127,6 +143,12 @@ impl SdViewerState {
             replay_playing: false,
             replay_speed_index: 0,
             replay_last_wall: None,
+            bg_receiver: None,
+            bg_label: None,
+            bg_progress: None,
+            bg_total: 0,
+            status_message: None,
+            last_export_dir: None,
         }
     }
 
@@ -140,29 +162,112 @@ impl SdViewerState {
         self.error = None;
         self.records.clear();
         self.clear_series();
+        self.bg_label = Some("LOADING".to_string());
 
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.error = Some(format!("Failed to read file: {}", e));
+        self.bg_total = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.bg_progress = Some(Arc::clone(&progress));
+
+        let (tx, rx) = mpsc::channel();
+        let path_owned = path.to_string();
+        std::thread::spawn(move || {
+            let data = match std::fs::read(&path_owned) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = tx.send(BgTaskResult::Error(format!("Failed to read file: {}", e)));
+                    return;
+                }
+            };
+            let records = parse_sd_file_with_progress(&data, Some(&progress));
+            if records.is_empty() {
+                let _ = tx.send(BgTaskResult::Error("No valid SD records found in file".to_string()));
                 return;
             }
-        };
+            let _ = tx.send(BgTaskResult::Loaded(records, path_owned));
+        });
+        self.bg_receiver = Some(rx);
+    }
 
-        let records = parse_sd_file(&data);
-        if records.is_empty() {
-            self.error = Some("No valid SD records found in file".to_string());
-            return;
-        }
-
+    fn finish_load(&mut self, records: Vec<SdRecord>, path: String) {
         self.extract_series(&records);
         self.build_state_segments(&records);
         self.detect_relay_events(&records);
         self.detect_command_events(&records);
-
         self.records = records;
         self.selected_index = 0;
-        self.file_path = Some(path.to_string());
+        self.file_path = Some(path);
+        self.status_message = Some(format!("LOADED {} RECORDS", self.records.len()));
+    }
+
+    pub fn start_export(&mut self, path: &str) {
+        self.error = None;
+        self.bg_label = Some("EXPORTING".to_string());
+        self.bg_total = self.records.len();
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.bg_progress = Some(Arc::clone(&progress));
+
+        let (tx, rx) = mpsc::channel();
+        let records = self.records.clone();
+        let path_owned = path.to_string();
+        std::thread::spawn(move || {
+            let result = export_csv_to_file(&path_owned, &records, Some(&progress));
+            match result {
+                Ok(()) => { let _ = tx.send(BgTaskResult::Exported(path_owned)); }
+                Err(e) => { let _ = tx.send(BgTaskResult::Error(e)); }
+            }
+        });
+        self.bg_receiver = Some(rx);
+    }
+
+    pub fn poll_task(&mut self) -> bool {
+        let rx = match self.bg_receiver.as_ref() {
+            Some(rx) => rx,
+            None => return false,
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.bg_receiver = None;
+                self.bg_label = None;
+                self.bg_progress = None;
+                self.bg_total = 0;
+                match result {
+                    BgTaskResult::Loaded(records, path) => self.finish_load(records, path),
+                    BgTaskResult::Exported(path) => {
+                        let p = std::path::Path::new(&path);
+                        let name = p.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.clone());
+                        self.last_export_dir = p.parent()
+                            .map(|d| d.to_string_lossy().to_string());
+                        self.status_message = Some(format!("EXPORTED TO {}", name.to_uppercase()));
+                    }
+                    BgTaskResult::Error(e) => self.error = Some(e),
+                }
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.bg_receiver = None;
+                self.bg_label = None;
+                self.bg_progress = None;
+                self.bg_total = 0;
+                self.error = Some("BACKGROUND TASK FAILED".to_string());
+                false
+            }
+        }
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.bg_receiver.is_some()
+    }
+
+    pub fn progress_fraction(&self) -> f32 {
+        match (&self.bg_progress, self.bg_total) {
+            (Some(p), total) if total > 0 => {
+                (p.load(Ordering::Relaxed) as f32 / total as f32).min(1.0)
+            }
+            _ => 0.0,
+        }
     }
 
     fn extract_series(&mut self, records: &[SdRecord]) {
@@ -345,4 +450,40 @@ impl SdViewerState {
         self.gps_trail.clear();
         self.selected_index = 0;
     }
+
+}
+
+fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<AtomicUsize>>) -> Result<(), String> {
+    let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
+    writeln!(file, "time_s,tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,drogue_fired,parachute_fired,last_command")
+        .map_err(|e| format!("Write error: {}", e))?;
+    for (i, r) in records.iter().enumerate() {
+        writeln!(
+            file,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            r.tick as f64 / TICK_RATE_HZ,
+            r.tick,
+            r.accel[0], r.accel[1], r.accel[2],
+            r.gyro[0], r.gyro[1], r.gyro[2],
+            r.mag[0], r.mag[1], r.mag[2],
+            r.pressure_pa,
+            r.temperature_c,
+            r.latitude,
+            r.longitude,
+            r.gps_altitude,
+            r.unix_time,
+            r.milliseconds,
+            r.satellites,
+            r.flags,
+            r.battery_voltage,
+            r.state,
+            r.relay.drogue_fired,
+            r.relay.parachute_fired,
+            r.last_command,
+        ).map_err(|e| format!("Write error: {}", e))?;
+        if let Some(p) = progress {
+            p.store(i + 1, Ordering::Relaxed);
+        }
+    }
+    Ok(())
 }

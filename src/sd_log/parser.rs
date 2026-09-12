@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use crate::telemetry::packet::{Command, FlightState, RelayState};
 use super::record::*;
 
@@ -112,10 +115,9 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
     })
 }
 
-pub fn parse_sd_file(data: &[u8]) -> Vec<SdRecord> {
+pub fn parse_sd_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsize>>) -> Vec<SdRecord> {
     let mut records = Vec::new();
 
-    // Try aligned reading first
     let mut offset = 0;
     while offset + SD_RECORD_SIZE <= data.len() {
         let chunk: &[u8; SD_RECORD_SIZE] = data[offset..offset + SD_RECORD_SIZE]
@@ -127,17 +129,22 @@ pub fn parse_sd_file(data: &[u8]) -> Vec<SdRecord> {
             if let Some(record) = parse_sd_record(chunk) {
                 records.push(record);
                 offset += SD_RECORD_SIZE;
+                if let Some(p) = progress {
+                    p.store(offset, Ordering::Relaxed);
+                }
                 continue;
             }
         }
 
-        // Aligned read failed — scan forward for next sync word
         offset += 1;
         while offset + 1 < data.len() {
             if data[offset] == 0xFE && data[offset + 1] == 0xCA {
                 break;
             }
             offset += 1;
+        }
+        if let Some(p) = progress {
+            p.store(offset, Ordering::Relaxed);
         }
     }
 
@@ -192,7 +199,7 @@ mod tests {
         data.extend_from_slice(&rec);
         data.extend_from_slice(&rec);
         data.extend_from_slice(&rec);
-        let results = parse_sd_file(&data);
+        let results = parse_sd_file_with_progress(&data, None);
         assert_eq!(results.len(), 3);
     }
 
@@ -201,7 +208,7 @@ mod tests {
         let rec = make_test_sd_record();
         let mut data = vec![0xAA, 0xBB, 0xCC];
         data.extend_from_slice(&rec);
-        let results = parse_sd_file(&data);
+        let results = parse_sd_file_with_progress(&data, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].tick, 500);
     }
