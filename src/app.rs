@@ -562,7 +562,9 @@ impl GroundStationApp {
                     if ui.button("CLOSE").clicked() {
                         self.sd_viewer.close_file();
                     }
-                    if ui.add_enabled(!self.sd_viewer.is_busy(), egui::Button::new("EXPORT CSV")).clicked() {
+                    if ui.add_enabled(!self.sd_viewer.is_busy(), egui::Button::new(
+                        egui::RichText::new("EXPORT CSV").color(egui::Color32::WHITE),
+                    ).fill(tc.green)).clicked() {
                         let default_name = std::path::Path::new(path)
                             .file_stem()
                             .map(|s| format!("{}.csv", s.to_string_lossy()))
@@ -983,9 +985,10 @@ impl GroundStationApp {
             let pct = (frac * 100.0) as u32;
             let current = self.sd_viewer.progress_current();
             let total = self.sd_viewer.bg_total;
+            let is_export = label == "EXPORTING";
             let eta_text = match self.sd_viewer.progress_eta_secs() {
-                Some(secs) if secs >= 60.0 => format!(" — ETA {}m{:02}s", secs as u64 / 60, secs as u64 % 60),
-                Some(secs) => format!(" — ETA {:.0}s", secs),
+                Some(secs) if secs >= 60.0 => format!("ETA {}m{:02}s", secs as u64 / 60, secs as u64 % 60),
+                Some(secs) => format!("ETA {:.0}s", secs),
                 None => String::new(),
             };
             egui::Window::new(label.as_str())
@@ -994,9 +997,17 @@ impl GroundStationApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(root_ui.ctx(), |ui| {
                     ui.set_min_width(300.0);
-                    ui.add(egui::ProgressBar::new(frac).text(format!(
-                        "{} / {} ({}%){}", current, total, pct, eta_text
-                    )));
+                    ui.label(format!("{} / {} ({}%)", current, total, pct));
+                    if !eta_text.is_empty() {
+                        ui.label(&eta_text);
+                    }
+                    ui.add(egui::ProgressBar::new(frac).desired_height(8.0));
+                    if is_export {
+                        ui.add_space(4.0);
+                        if ui.button("CANCEL").clicked() {
+                            self.sd_viewer.cancel_export();
+                        }
+                    }
                 });
         }
 

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,6 +14,7 @@ use crate::ui::map::MapState;
 pub enum BgTaskResult {
     Loaded(Vec<SdRecord>, String),
     Exported(String),
+    Cancelled,
     Error(String),
 }
 
@@ -115,6 +116,7 @@ pub struct SdViewerState {
     pub status_message: Option<String>,
     pub last_export_dir: Option<String>,
     pub bg_start_time: Option<Instant>,
+    pub bg_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl SdViewerState {
@@ -156,6 +158,7 @@ impl SdViewerState {
             status_message: None,
             last_export_dir: None,
             bg_start_time: None,
+            bg_cancel: None,
         }
     }
 
@@ -214,18 +217,27 @@ impl SdViewerState {
         self.bg_total = self.records.len();
         let progress = Arc::new(AtomicUsize::new(0));
         self.bg_progress = Some(Arc::clone(&progress));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.bg_cancel = Some(Arc::clone(&cancel));
 
         let (tx, rx) = mpsc::channel();
         let records = self.records.clone();
         let path_owned = path.to_string();
         std::thread::spawn(move || {
-            let result = export_csv_to_file(&path_owned, &records, Some(&progress));
+            let result = export_csv_to_file(&path_owned, &records, Some(&progress), Some(&cancel));
             match result {
-                Ok(()) => { let _ = tx.send(BgTaskResult::Exported(path_owned)); }
+                Ok(true) => { let _ = tx.send(BgTaskResult::Exported(path_owned)); }
+                Ok(false) => { let _ = tx.send(BgTaskResult::Cancelled); }
                 Err(e) => { let _ = tx.send(BgTaskResult::Error(e)); }
             }
         });
         self.bg_receiver = Some(rx);
+    }
+
+    pub fn cancel_export(&mut self) {
+        if let Some(ref cancel) = self.bg_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     pub fn poll_task(&mut self) -> bool {
@@ -240,6 +252,7 @@ impl SdViewerState {
                 self.bg_progress = None;
                 self.bg_total = 0;
                 self.bg_start_time = None;
+                self.bg_cancel = None;
                 match result {
                     BgTaskResult::Loaded(records, path) => self.finish_load(records, path),
                     BgTaskResult::Exported(path) => {
@@ -250,6 +263,9 @@ impl SdViewerState {
                         self.last_export_dir = p.parent()
                             .map(|d| d.to_string_lossy().to_string());
                         self.status_message = Some(format!("EXPORTED TO {}", name.to_uppercase()));
+                    }
+                    BgTaskResult::Cancelled => {
+                        self.status_message = Some("EXPORT CANCELLED".to_string());
                     }
                     BgTaskResult::Error(e) => self.error = Some(e),
                 }
@@ -262,6 +278,7 @@ impl SdViewerState {
                 self.bg_progress = None;
                 self.bg_total = 0;
                 self.bg_start_time = None;
+                self.bg_cancel = None;
                 self.error = Some("BACKGROUND TASK FAILED".to_string());
                 false
             }
@@ -536,11 +553,16 @@ impl SdViewerState {
 
 }
 
-fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<AtomicUsize>>) -> Result<(), String> {
+fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<AtomicUsize>>, cancel: Option<&Arc<AtomicBool>>) -> Result<bool, String> {
     let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,relay,last_command")
         .map_err(|e| format!("Write error: {}", e))?;
     for (i, r) in records.iter().enumerate() {
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+        }
         let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
         writeln!(
             file,
@@ -567,5 +589,5 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<At
             p.store(i + 1, Ordering::Relaxed);
         }
     }
-    Ok(())
+    Ok(true)
 }
