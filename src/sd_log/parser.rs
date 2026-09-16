@@ -94,7 +94,7 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
     let last_command = Command::from_u8(r.u8()).unwrap_or(Command::None);
 
     Some(SdRecord {
-        raw: *buf,
+        raw: buf.to_vec(),
         tick,
         accel,
         gyro,
@@ -113,6 +113,78 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
         relay,
         last_command,
     })
+}
+
+pub fn parse_flash_record(buf: &[u8; FLASH_RECORD_SIZE]) -> Option<SdRecord> {
+    let mut r = RecordReader::new(buf);
+
+    let sync = r.u16_le();
+    if sync != SD_SYNC_WORD {
+        return None;
+    }
+    if buf[FLASH_RECORD_SIZE - 1] != SD_SYNC_END {
+        return None;
+    }
+
+    let tick = r.u32_le();
+    let accel = [r.f32_le(), r.f32_le(), r.f32_le()];
+    let gyro = [r.f32_le(), r.f32_le(), r.f32_le()];
+    let state = FlightState::from_u8(r.u8())?;
+
+    Some(SdRecord {
+        raw: buf.to_vec(),
+        tick,
+        accel,
+        gyro,
+        mag: [0.0; 3],
+        pressure_pa: 0.0,
+        temperature_c: 0.0,
+        latitude: 0.0,
+        longitude: 0.0,
+        gps_altitude: 0.0,
+        unix_time: 0,
+        milliseconds: 0,
+        satellites: 0,
+        flags: 0,
+        battery_voltage: 0.0,
+        state,
+        relay: RelayState::from_u8(0),
+        last_command: Command::None,
+    })
+}
+
+pub fn parse_flash_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsize>>) -> Vec<SdRecord> {
+    let mut records = Vec::new();
+    let mut offset = 0;
+    while offset + FLASH_RECORD_SIZE <= data.len() {
+        let chunk: &[u8; FLASH_RECORD_SIZE] = data[offset..offset + FLASH_RECORD_SIZE]
+            .try_into()
+            .unwrap();
+
+        let sync = u16::from_le_bytes([chunk[0], chunk[1]]);
+        if sync == SD_SYNC_WORD && chunk[FLASH_RECORD_SIZE - 1] == SD_SYNC_END {
+            if let Some(record) = parse_flash_record(chunk) {
+                records.push(record);
+                offset += FLASH_RECORD_SIZE;
+                if let Some(p) = progress {
+                    p.store(offset, Ordering::Relaxed);
+                }
+                continue;
+            }
+        }
+
+        offset += 1;
+        while offset + 1 < data.len() {
+            if data[offset] == 0xFE && data[offset + 1] == 0xCA {
+                break;
+            }
+            offset += 1;
+        }
+        if let Some(p) = progress {
+            p.store(offset, Ordering::Relaxed);
+        }
+    }
+    records
 }
 
 pub fn parse_sd_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsize>>) -> Vec<SdRecord> {

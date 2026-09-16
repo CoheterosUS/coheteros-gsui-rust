@@ -1,6 +1,7 @@
 use crate::telemetry::packet::{Command, FlightState, PacketField, RelayState};
 
 pub const SD_RECORD_SIZE: usize = 81;
+pub const FLASH_RECORD_SIZE: usize = 32;
 pub const SD_SYNC_WORD: u16 = 0xCAFE;
 pub const SD_SYNC_END: u8 = 0xBE;
 pub const GPS_SCALE: f64 = 10_000_000.0;
@@ -8,7 +9,7 @@ pub const TICK_RATE_HZ: f64 = 1000.0;
 
 #[derive(Debug, Clone)]
 pub struct SdRecord {
-    pub raw: [u8; SD_RECORD_SIZE],
+    pub raw: Vec<u8>,
     pub tick: u32,
     pub accel: [f64; 3],
     pub gyro: [f64; 3],
@@ -54,4 +55,17 @@ pub const SD_RECORD_FIELDS: &[PacketField] = &[
     PacketField { name: "RELAY",     offset: 78, length: 1, color: [255, 165, 0] },
     PacketField { name: "CMD",       offset: 79, length: 1, color: [180, 180, 255] },
     PacketField { name: "SYNC END",  offset: 80, length: 1, color: [255, 255, 255] },
+];
+
+pub const FLASH_RECORD_FIELDS: &[PacketField] = &[
+    PacketField { name: "SYNC",      offset: 0,  length: 2, color: [255, 255, 255] },
+    PacketField { name: "TICK",      offset: 2,  length: 4, color: [100, 200, 255] },
+    PacketField { name: "ACCEL X",   offset: 6,  length: 4, color: [255, 100, 100] },
+    PacketField { name: "ACCEL Y",   offset: 10, length: 4, color: [255, 130, 100] },
+    PacketField { name: "ACCEL Z",   offset: 14, length: 4, color: [255, 160, 100] },
+    PacketField { name: "GYRO X",    offset: 18, length: 4, color: [100, 255, 100] },
+    PacketField { name: "GYRO Y",    offset: 22, length: 4, color: [130, 255, 100] },
+    PacketField { name: "GYRO Z",    offset: 26, length: 4, color: [160, 255, 100] },
+    PacketField { name: "STATE",     offset: 30, length: 1, color: [0, 200, 255] },
+    PacketField { name: "SYNC END",  offset: 31, length: 1, color: [255, 255, 255] },
 ];

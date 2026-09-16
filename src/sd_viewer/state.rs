@@ -5,14 +5,20 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::sd_log::parser::parse_sd_file_with_progress;
+use crate::sd_log::parser::{parse_sd_file_with_progress, parse_flash_file_with_progress};
 use crate::sd_log::record::{SdRecord, TICK_RATE_HZ};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataSource {
+    SdLog,
+    FlashLog,
+}
 use crate::sd_viewer::charts;
 use crate::telemetry::packet::{Command, FlightState};
 use crate::ui::map::MapState;
 
 pub enum BgTaskResult {
-    Loaded(Vec<SdRecord>, String),
+    Loaded(Vec<SdRecord>, String, DataSource),
     Exported(String),
     Cancelled,
     Error(String),
@@ -81,6 +87,7 @@ pub const REPLAY_SPEEDS: &[f64] = &[1.0, 1.5, 2.0, 4.0];
 
 pub struct SdViewerState {
     pub records: Vec<SdRecord>,
+    pub data_source: DataSource,
     pub file_path: Option<String>,
     pub selected_index: usize,
     pub error: Option<String>,
@@ -123,6 +130,7 @@ impl SdViewerState {
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
+            data_source: DataSource::SdLog,
             file_path: None,
             selected_index: 0,
             error: None,
@@ -189,25 +197,38 @@ impl SdViewerState {
                     return;
                 }
             };
-            let records = parse_sd_file_with_progress(&data, Some(&progress));
-            if records.is_empty() {
-                let _ = tx.send(BgTaskResult::Error("No valid SD records found in file".to_string()));
+            let sd_records = parse_sd_file_with_progress(&data, Some(&progress));
+            if !sd_records.is_empty() {
+                let _ = tx.send(BgTaskResult::Loaded(sd_records, path_owned, DataSource::SdLog));
                 return;
             }
-            let _ = tx.send(BgTaskResult::Loaded(records, path_owned));
+            progress.store(0, Ordering::Relaxed);
+            let flash_records = parse_flash_file_with_progress(&data, Some(&progress));
+            if !flash_records.is_empty() {
+                let _ = tx.send(BgTaskResult::Loaded(flash_records, path_owned, DataSource::FlashLog));
+                return;
+            }
+            let _ = tx.send(BgTaskResult::Error("No valid SD or Flash records found in file".to_string()));
         });
         self.bg_receiver = Some(rx);
     }
 
-    fn finish_load(&mut self, records: Vec<SdRecord>, path: String) {
+    fn finish_load(&mut self, records: Vec<SdRecord>, path: String, source: DataSource) {
+        self.data_source = source;
         self.extract_series(&records);
         self.build_state_segments(&records);
-        self.detect_relay_events(&records);
-        self.detect_command_events(&records);
+        if source == DataSource::SdLog {
+            self.detect_relay_events(&records);
+            self.detect_command_events(&records);
+        }
         self.records = records;
         self.selected_index = 0;
         self.file_path = Some(path);
-        self.status_message = Some(format!("LOADED {} RECORDS", self.records.len()));
+        let label = match source {
+            DataSource::SdLog => "SD",
+            DataSource::FlashLog => "FLASH",
+        };
+        self.status_message = Some(format!("LOADED {} {} RECORDS", self.records.len(), label));
     }
 
     pub fn start_export(&mut self, path: &str) {
@@ -222,9 +243,10 @@ impl SdViewerState {
 
         let (tx, rx) = mpsc::channel();
         let records = self.records.clone();
+        let source = self.data_source;
         let path_owned = path.to_string();
         std::thread::spawn(move || {
-            let result = export_csv_to_file(&path_owned, &records, Some(&progress), Some(&cancel));
+            let result = export_csv_to_file(&path_owned, &records, source, Some(&progress), Some(&cancel));
             match result {
                 Ok(true) => { let _ = tx.send(BgTaskResult::Exported(path_owned)); }
                 Ok(false) => { let _ = tx.send(BgTaskResult::Cancelled); }
@@ -254,7 +276,7 @@ impl SdViewerState {
                 self.bg_start_time = None;
                 self.bg_cancel = None;
                 match result {
-                    BgTaskResult::Loaded(records, path) => self.finish_load(records, path),
+                    BgTaskResult::Loaded(records, path, source) => self.finish_load(records, path, source),
                     BgTaskResult::Exported(path) => {
                         let p = std::path::Path::new(&path);
                         let name = p.file_name()
@@ -522,6 +544,10 @@ impl SdViewerState {
         REPLAY_SPEEDS[self.replay_speed_index]
     }
 
+    pub fn has_full_data(&self) -> bool {
+        self.data_source == DataSource::SdLog
+    }
+
     pub fn close_file(&mut self) {
         self.records.clear();
         self.file_path = None;
@@ -553,38 +579,60 @@ impl SdViewerState {
 
 }
 
-fn export_csv_to_file(path: &str, records: &[SdRecord], progress: Option<&Arc<AtomicUsize>>, cancel: Option<&Arc<AtomicBool>>) -> Result<bool, String> {
+fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, progress: Option<&Arc<AtomicUsize>>, cancel: Option<&Arc<AtomicBool>>) -> Result<bool, String> {
     let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
-    writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,relay,last_command")
-        .map_err(|e| format!("Write error: {}", e))?;
+    match source {
+        DataSource::SdLog => {
+            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,relay,last_command")
+                .map_err(|e| format!("Write error: {}", e))?;
+        }
+        DataSource::FlashLog => {
+            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,state")
+                .map_err(|e| format!("Write error: {}", e))?;
+        }
+    }
     for (i, r) in records.iter().enumerate() {
         if let Some(c) = cancel {
             if c.load(Ordering::Relaxed) {
                 return Ok(false);
             }
         }
-        let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
-        writeln!(
-            file,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            r.tick,
-            r.accel[0], r.accel[1], r.accel[2],
-            r.gyro[0], r.gyro[1], r.gyro[2],
-            r.mag[0], r.mag[1], r.mag[2],
-            r.pressure_pa,
-            r.temperature_c,
-            r.latitude,
-            r.longitude,
-            r.gps_altitude,
-            r.unix_time,
-            r.milliseconds,
-            r.satellites,
-            r.flags,
-            r.battery_voltage,
-            r.state as u8,
-            relay_val,
-            r.last_command as u8,
-        ).map_err(|e| format!("Write error: {}", e))?;
+        match source {
+            DataSource::SdLog => {
+                let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
+                writeln!(
+                    file,
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    r.tick,
+                    r.accel[0], r.accel[1], r.accel[2],
+                    r.gyro[0], r.gyro[1], r.gyro[2],
+                    r.mag[0], r.mag[1], r.mag[2],
+                    r.pressure_pa,
+                    r.temperature_c,
+                    r.latitude,
+                    r.longitude,
+                    r.gps_altitude,
+                    r.unix_time,
+                    r.milliseconds,
+                    r.satellites,
+                    r.flags,
+                    r.battery_voltage,
+                    r.state as u8,
+                    relay_val,
+                    r.last_command as u8,
+                ).map_err(|e| format!("Write error: {}", e))?;
+            }
+            DataSource::FlashLog => {
+                writeln!(
+                    file,
+                    "{},{},{},{},{},{},{},{}",
+                    r.tick,
+                    r.accel[0], r.accel[1], r.accel[2],
+                    r.gyro[0], r.gyro[1], r.gyro[2],
+                    r.state as u8,
+                ).map_err(|e| format!("Write error: {}", e))?;
+            }
+        }
         if let Some(p) = progress {
             p.store(i + 1, Ordering::Relaxed);
         }

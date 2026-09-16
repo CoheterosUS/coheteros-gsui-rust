@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::csv_recorder::CsvRecorder;
-use crate::sd_log::record::SD_RECORD_FIELDS;
+use crate::sd_log::record::{SD_RECORD_FIELDS, FLASH_RECORD_FIELDS};
+use crate::sd_viewer::state::DataSource;
 use crate::sd_viewer::state::SdViewerState;
 use crate::serial::worker::{SerialCommand, SerialEvent};
 use crate::state::AppState;
@@ -354,7 +355,7 @@ impl GroundStationApp {
 
                     if let Some(ref t) = t {
                         let overlay_width = 195.0;
-                        let overlay_height = 82.0;
+                        let overlay_height = 100.0;
                         let overlay_pos = egui::pos2(
                             map_rect.right() - overlay_width - 4.0,
                             map_rect.bottom() - overlay_height - 4.0,
@@ -388,6 +389,21 @@ impl GroundStationApp {
                             painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
                             painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
                             y += line_h;
+                        }
+
+                        let link_rect = egui::Rect::from_min_size(
+                            egui::pos2(x_label, y),
+                            egui::vec2(overlay_width - 16.0, line_h),
+                        );
+                        let link_resp = ui.interact(link_rect, ui.id().with("live_gmaps_link"), egui::Sense::click());
+                        let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
+                        painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
+                        if link_resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if link_resp.clicked() {
+                            let url = format!("https://www.google.com/maps?q={},{}", t.latitude, t.longitude);
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
                     }
                 });
@@ -580,7 +596,11 @@ impl GroundStationApp {
                     ui.separator();
                     ui.label(egui::RichText::new(path).family(egui::FontFamily::Monospace));
                     ui.separator();
-                    ui.label(format!("{} RECORDS", self.sd_viewer.records.len()));
+                    let source_label = match self.sd_viewer.data_source {
+                        DataSource::SdLog => "SD",
+                        DataSource::FlashLog => "FLASH",
+                    };
+                    ui.label(format!("{} {} RECORDS", self.sd_viewer.records.len(), source_label));
                     ui.separator();
                     let dur = self.sd_viewer.duration_secs();
                     let mins = (dur / 60.0) as u32;
@@ -612,7 +632,7 @@ impl GroundStationApp {
             egui::CentralPanel::default().show(root_ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(ui.available_height() * 0.3);
-                    ui.label(egui::RichText::new("OPEN OR DROP A .BIN FILE TO VIEW SD LOG DATA")
+                    ui.label(egui::RichText::new("OPEN OR DROP A .BIN FILE TO VIEW SD / FLASH LOG DATA")
                         .size(18.0)
                         .color(tc.label_color));
                     ui.add_space(20.0);
@@ -643,10 +663,12 @@ impl GroundStationApp {
                     .show_value(true));
 
                 if let Some(r) = self.sd_viewer.selected_record() {
-                    if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
-                        ui.separator();
-                        ui.label(egui::RichText::new(dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string())
-                            .family(egui::FontFamily::Monospace));
+                    if self.sd_viewer.has_full_data() {
+                        if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
+                            ui.separator();
+                            ui.label(egui::RichText::new(dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string())
+                                .family(egui::FontFamily::Monospace));
+                        }
                     }
                     ui.separator();
                     ui.label(format!("TICK: {}", r.tick));
@@ -705,7 +727,10 @@ impl GroundStationApp {
             });
         });
 
+        let has_full = self.sd_viewer.has_full_data();
+
         // === MAP (right panel) ===
+        if has_full {
         egui::Panel::right("sd_map_panel")
             .default_size(300.0)
             .min_size(250.0)
@@ -746,7 +771,7 @@ impl GroundStationApp {
 
                         if let Some(r) = self.sd_viewer.selected_record() {
                             let overlay_width = 195.0;
-                            let overlay_height = 82.0;
+                            let overlay_height = 100.0;
                             let overlay_pos = egui::pos2(
                                 map_rect.right() - overlay_width - 4.0,
                                 map_rect.bottom() - overlay_height - 4.0,
@@ -781,16 +806,33 @@ impl GroundStationApp {
                                 painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
                                 y += line_h;
                             }
+
+                            let link_rect = egui::Rect::from_min_size(
+                                egui::pos2(x_label, y),
+                                egui::vec2(overlay_width - 16.0, line_h),
+                            );
+                            let link_resp = ui.interact(link_rect, ui.id().with("sd_gmaps_link"), egui::Sense::click());
+                            let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
+                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
+                            if link_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if link_resp.clicked() {
+                                let url = format!("https://www.google.com/maps?q={},{}", r.latitude, r.longitude);
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                            }
                         }
                     }
                 });
             });
+        } // has_full (map panel)
 
         // === CENTER: Data grid (sticky) + Charts (scrollable) ===
         egui::CentralPanel::default().show(root_ui, |ui| {
             let r = self.sd_viewer.selected_record().cloned();
 
-            ui.columns(4, |cols| {
+            if has_full {
+                ui.columns(4, |cols| {
                     theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
                         if let Some(ref r) = r {
                             theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
@@ -880,6 +922,32 @@ impl GroundStationApp {
                         }
                     });
                 });
+            } else {
+                ui.columns(3, |cols| {
+                    theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
+                            theme::data_row(ui, "STATE", &format!("{}", r.state), dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
+                            theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
+                            theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", r.accel[2]), dm);
+                        }
+                    });
+
+                    theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
+                        if let Some(ref r) = r {
+                            theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
+                            theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
+                            theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", r.gyro[2]), dm);
+                        }
+                    });
+                });
+            }
 
                 ui.add_space(4.0);
 
@@ -892,6 +960,16 @@ impl GroundStationApp {
                 use crate::sd_viewer::charts;
                 let mut clicked_ts: Option<f64> = None;
                 let mut new_zoom: Option<(f64, f64)> = None;
+
+                let na_label = |ui: &mut egui::Ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(60.0);
+                        ui.label(egui::RichText::new("NOT AVAILABLE")
+                            .size(16.0)
+                            .color(tc.label_color.gamma_multiply(0.5)));
+                        ui.add_space(60.0);
+                    });
+                };
 
                 theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
                     if let Some(click) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers, selected_t, zoom_x, link_axes, reset) {
@@ -914,21 +992,27 @@ impl GroundStationApp {
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "GPS ALTITUDE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
+                    if has_full {
+                        if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "BARO ALTITUDE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_alt", "BARO ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.baro_altitude, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
+                    if has_full {
+                        if let Some(t) = charts::single_series_chart(ui, "sd_baro_alt", "BARO ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.baro_altitude, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "BARO VELOCITY", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &self.sd_viewer.timestamps, &self.sd_viewer.baro_velocity, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
+                    if has_full {
+                        if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &self.sd_viewer.timestamps, &self.sd_viewer.baro_velocity, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
@@ -944,21 +1028,27 @@ impl GroundStationApp {
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
+                    if has_full {
+                        if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
+                    if has_full {
+                        if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
                 });
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
+                    if has_full {
+                        if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
                 });
 
                 if let Some(z) = new_zoom {
@@ -972,7 +1062,8 @@ impl GroundStationApp {
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "RAW RECORD", tc.accent, dm, |ui| {
                     if let Some(ref r) = r {
-                        ui::hex_viewer::hex_viewer(ui, &r.raw, SD_RECORD_FIELDS, dm);
+                        let fields = if has_full { SD_RECORD_FIELDS } else { FLASH_RECORD_FIELDS };
+                        ui::hex_viewer::hex_viewer(ui, &r.raw, fields, dm);
                     } else {
                         ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
                     }
@@ -1169,7 +1260,7 @@ impl eframe::App for GroundStationApp {
                 ui.horizontal(|ui| {
                     let tabs = [
                         (ActiveTab::LiveTelemetry, "LIVE TELEMETRY"),
-                        (ActiveTab::SdViewer, "SD VIEWER"),
+                        (ActiveTab::SdViewer, "FLASH/SD VIEWER"),
                     ];
 
                     for (tab, label) in tabs {
