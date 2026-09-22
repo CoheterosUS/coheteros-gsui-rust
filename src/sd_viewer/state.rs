@@ -37,6 +37,14 @@ impl StateSegment {
     }
 }
 
+pub struct GapInfo {
+    pub start: f64,
+    pub end: f64,
+    pub dropped: u64,
+    pub delta_ticks: u32,
+    pub expected_ticks: u32,
+}
+
 pub struct TimelineMarker {
     pub timestamp: f64,
     pub label: &'static str,
@@ -109,6 +117,7 @@ pub struct SdViewerState {
     pub battery: Vec<f64>,
     pub baro_altitude: Vec<f64>,
     pub baro_velocity: Vec<f64>,
+    pub gaps: Vec<GapInfo>,
     pub state_segments: Vec<StateSegment>,
     pub timeline_markers: Vec<TimelineMarker>,
     pub gps_trail: VecDeque<(f64, f64)>,
@@ -152,6 +161,7 @@ impl SdViewerState {
             battery: Vec::new(),
             baro_altitude: Vec::new(),
             baro_velocity: Vec::new(),
+            gaps: Vec::new(),
             state_segments: Vec::new(),
             timeline_markers: Vec::new(),
             gps_trail: VecDeque::new(),
@@ -217,6 +227,7 @@ impl SdViewerState {
         self.data_source = source;
         self.extract_series(&records);
         self.build_state_segments(&records);
+        self.detect_gaps(&records);
         if source == DataSource::SdLog {
             self.detect_relay_events(&records);
             self.detect_command_events(&records);
@@ -422,6 +433,38 @@ impl SdViewerState {
         }
     }
 
+    fn detect_gaps(&mut self, records: &[SdRecord]) {
+        if records.len() < 2 {
+            return;
+        }
+
+        let mut deltas: Vec<u32> = Vec::with_capacity(records.len() - 1);
+        for w in records.windows(2) {
+            deltas.push(w[1].tick.wrapping_sub(w[0].tick));
+        }
+
+        let expected = {
+            let mut sorted = deltas.clone();
+            sorted.sort_unstable();
+            sorted[sorted.len() / 2]
+        };
+
+        for (i, &delta) in deltas.iter().enumerate() {
+            if delta > expected * 2 {
+                let start = records[i].tick as f64 / TICK_RATE_HZ;
+                let end = records[i + 1].tick as f64 / TICK_RATE_HZ;
+                let dropped = (delta / expected).saturating_sub(1) as u64;
+                self.gaps.push(GapInfo {
+                    start,
+                    end,
+                    dropped,
+                    delta_ticks: delta,
+                    expected_ticks: expected,
+                });
+            }
+        }
+    }
+
     fn build_state_segments(&mut self, records: &[SdRecord]) {
         if records.is_empty() {
             return;
@@ -573,6 +616,7 @@ impl SdViewerState {
         self.battery.clear();
         self.baro_altitude.clear();
         self.baro_velocity.clear();
+        self.gaps.clear();
         self.gps_trail.clear();
         self.selected_index = 0;
     }

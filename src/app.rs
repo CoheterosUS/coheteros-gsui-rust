@@ -991,6 +991,22 @@ impl GroundStationApp {
                     }
                 });
                 ui.add_space(4.0);
+                {
+                    let gap_count = self.sd_viewer.gaps.len();
+                    let total_dropped: u64 = self.sd_viewer.gaps.iter().map(|g| g.dropped).sum();
+                    let label = if gap_count > 0 {
+                        format!("SAMPLE GAPS — {} GAPS, ~{} DROPPED", gap_count, total_dropped)
+                    } else {
+                        "SAMPLE GAPS — NONE".to_string()
+                    };
+                    theme::bordered_section(ui, &label, tc.accent, dm, |ui| {
+                        let duration = self.sd_viewer.duration_secs();
+                        if let Some(t) = charts::gap_timeline_chart(ui, &self.sd_viewer.gaps, duration, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    });
+                }
+                ui.add_space(4.0);
                 theme::bordered_section(ui, "GPS ALTITUDE", tc.accent, dm, |ui| {
                     if has_full {
                         if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes, reset) {

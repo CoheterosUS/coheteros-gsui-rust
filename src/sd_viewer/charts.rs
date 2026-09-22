@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use egui::Align2;
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, VLine};
-use crate::sd_viewer::state::{StateSegment, TimelineMarker};
+use crate::sd_viewer::state::{GapInfo, StateSegment, TimelineMarker};
 
 const MAX_CHART_POINTS: usize = 10_000;
 const LINK_GROUP: &str = "sd_x_link";
@@ -280,4 +280,91 @@ pub fn state_timeline_chart(
         return Some(TimelineClick::Point(t));
     }
     None
+}
+
+pub fn gap_timeline_chart(
+    ui: &mut egui::Ui,
+    gaps: &[GapInfo],
+    total_duration: f64,
+    selected_t: Option<f64>,
+    zoom_x: Option<(f64, f64)>,
+    link_axes: bool,
+    reset: bool,
+) -> Option<f64> {
+    let gap_slice = gaps;
+    let mut gap_plot = Plot::new("sd_gap_timeline")
+        .height(50.0)
+        .allow_drag(true)
+        .allow_zoom(true)
+        .allow_scroll(false)
+        .show_axes([true, false])
+        .y_axis_label("")
+        .include_y(-0.5)
+        .include_y(0.5)
+        .include_x(0.0)
+        .include_x(total_duration)
+        .show_crosshair(false);
+    if link_axes {
+        gap_plot = gap_plot.link_axis(egui::Id::new(LINK_GROUP), [true, false]);
+    }
+    if reset {
+        gap_plot = gap_plot.reset();
+    }
+
+    let gap_color = egui::Color32::from_rgb(255, 60, 60);
+
+    let plot_response = gap_plot
+        .label_formatter(move |hover| {
+            let x = hover_x(hover);
+            for g in gap_slice {
+                if x >= g.start && x <= g.end {
+                    let duration_ms = (g.end - g.start) * 1000.0;
+                    return Some(format!(
+                        "GAP: {:.1}ms\n~{} samples dropped\nΔ {} ticks (expected {})",
+                        duration_ms, g.dropped, g.delta_ticks, g.expected_ticks
+                    ));
+                }
+            }
+            None
+        })
+        .show(ui, |plot_ui| {
+            if let Some((lo, hi)) = zoom_x {
+                plot_ui.set_plot_bounds_x(lo..=hi);
+            }
+            let bars: Vec<Bar> = gaps.iter().map(|g| {
+                let duration = g.end - g.start;
+                Bar::new(0.0, duration)
+                    .base_offset(g.start)
+                    .fill(gap_color)
+                    .stroke(egui::Stroke::new(0.5, gap_color))
+                    .name("GAP")
+            }).collect();
+            if !bars.is_empty() {
+                plot_ui.bar_chart(
+                    BarChart::new("GAPS".to_string(), bars)
+                        .horizontal()
+                        .width(0.8)
+                        .color(gap_color),
+                );
+            }
+            for (i, g) in gaps.iter().enumerate() {
+                let mid = (g.start + g.end) / 2.0;
+                let text = egui::RichText::new(format!(" ~{} ", g.dropped))
+                    .size(10.0)
+                    .color(egui::Color32::WHITE)
+                    .background_color(gap_color);
+                plot_ui.text(
+                    egui_plot::Text::new(
+                        format!("gap_{}", i),
+                        egui_plot::PlotPoint::new(mid, 0.0),
+                        text,
+                    )
+                    .anchor(Align2::CENTER_CENTER),
+                );
+            }
+            if let Some(vline) = cursor_line(selected_t) {
+                plot_ui.vline(vline);
+            }
+        });
+    handle_click(&plot_response.response, &plot_response.transform)
 }
