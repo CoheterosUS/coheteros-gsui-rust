@@ -351,6 +351,7 @@ impl GroundStationApp {
                         current_gps,
                         self.state.ground_pos,
                         &mut self.map_state,
+                        0.0,
                     );
 
                     if let Some(ref t) = t {
@@ -736,6 +737,17 @@ impl GroundStationApp {
             .min_size(250.0)
             .resizable(true)
             .show(root_ui, |ui| {
+                theme::bordered_section(ui, "ATTITUDE", tc.accent, dm, |ui| {
+                    let idx = self.sd_viewer.selected_index;
+                    let q = [
+                        self.sd_viewer.quat_w.get(idx).copied().unwrap_or(1.0),
+                        self.sd_viewer.quat_x.get(idx).copied().unwrap_or(0.0),
+                        self.sd_viewer.quat_y.get(idx).copied().unwrap_or(0.0),
+                        self.sd_viewer.quat_z.get(idx).copied().unwrap_or(0.0),
+                    ];
+                    ui::rocket3d::rocket_attitude(ui, q, dm);
+                });
+                ui.add_space(4.0);
                 theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
                     let current_gps = self.sd_viewer.selected_record()
                         .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
@@ -767,6 +779,7 @@ impl GroundStationApp {
                             current_gps,
                             None,
                             map_state,
+                            0.0,
                         );
 
                         if let Some(r) = self.sd_viewer.selected_record() {
@@ -823,6 +836,7 @@ impl GroundStationApp {
                             }
                         }
                     }
+
                 });
             });
         } // has_full (map panel)
@@ -1007,17 +1021,9 @@ impl GroundStationApp {
                     });
                 }
                 ui.add_space(4.0);
-                theme::bordered_section(ui, "GPS ALTITUDE", tc.accent, dm, |ui| {
+                theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
                     if has_full {
-                        if let Some(t) = charts::single_series_chart(ui, "sd_gps_alt", "GPS ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "BARO ALTITUDE", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::single_series_chart(ui, "sd_baro_alt", "BARO ALT", "m", &self.sd_viewer.timestamps, &self.sd_viewer.baro_altitude, selected_t, zoom_x, link_axes, reset) {
+                        if let Some(t) = charts::altitude_chart(ui, &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, &self.sd_viewer.baro_altitude, selected_t, zoom_x, link_axes, reset) {
                             clicked_ts = Some(t);
                         }
                     } else { na_label(ui); }
@@ -1043,6 +1049,22 @@ impl GroundStationApp {
                     }
                 });
                 ui.add_space(4.0);
+                theme::bordered_section(ui, "KALMAN POSITION (NED)", tc.accent, dm, |ui| {
+                    if has_full {
+                        if let Some(t) = charts::triple_series_chart(ui, "sd_pos", "m", &self.sd_viewer.timestamps, &self.sd_viewer.pos_x, &self.sd_viewer.pos_y, &self.sd_viewer.pos_z, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "KALMAN VELOCITY (NED)", tc.accent, dm, |ui| {
+                    if has_full {
+                        if let Some(t) = charts::triple_series_chart(ui, "sd_vel", "m/s", &self.sd_viewer.timestamps, &self.sd_viewer.vel_x, &self.sd_viewer.vel_y, &self.sd_viewer.vel_z, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
+                });
+                ui.add_space(4.0);
                 theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
                     if has_full {
                         if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes, reset) {
@@ -1062,6 +1084,14 @@ impl GroundStationApp {
                 theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
                     if has_full {
                         if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes, reset) {
+                            clicked_ts = Some(t);
+                        }
+                    } else { na_label(ui); }
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "RELAYS", tc.accent, dm, |ui| {
+                    if has_full {
+                        if let Some(t) = charts::relay_chart(ui, &self.sd_viewer.timestamps, &self.sd_viewer.relay_drogue, &self.sd_viewer.relay_parachute, selected_t, zoom_x, link_axes, reset) {
                             clicked_ts = Some(t);
                         }
                     } else { na_label(ui); }

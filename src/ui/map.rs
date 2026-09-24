@@ -48,6 +48,7 @@ pub fn gps_map(
     current_pos: Option<(f64, f64)>,
     ground_pos: Option<(f64, f64)>,
     map_state: &mut MapState,
+    reserve_below: f32,
 ) -> egui::Rect {
     let my_pos = current_pos
         .map(|(lat, lon)| lat_lon(lat, lon))
@@ -57,7 +58,7 @@ pub fn gps_map(
                 .unwrap_or_else(|| lat_lon(0.0, 0.0))
         });
 
-    let map_height = ui.available_height().max(200.0);
+    let map_height = (ui.available_height() - reserve_below).max(200.0);
     let map_width = ui.available_width();
 
     let (rect, _) = ui.allocate_exact_size(

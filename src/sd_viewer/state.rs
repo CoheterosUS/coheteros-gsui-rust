@@ -117,6 +117,18 @@ pub struct SdViewerState {
     pub battery: Vec<f64>,
     pub baro_altitude: Vec<f64>,
     pub baro_velocity: Vec<f64>,
+    pub relay_drogue: Vec<f64>,
+    pub relay_parachute: Vec<f64>,
+    pub pos_x: Vec<f64>,
+    pub pos_y: Vec<f64>,
+    pub pos_z: Vec<f64>,
+    pub vel_x: Vec<f64>,
+    pub vel_y: Vec<f64>,
+    pub vel_z: Vec<f64>,
+    pub quat_w: Vec<f64>,
+    pub quat_x: Vec<f64>,
+    pub quat_y: Vec<f64>,
+    pub quat_z: Vec<f64>,
     pub gaps: Vec<GapInfo>,
     pub state_segments: Vec<StateSegment>,
     pub timeline_markers: Vec<TimelineMarker>,
@@ -161,6 +173,18 @@ impl SdViewerState {
             battery: Vec::new(),
             baro_altitude: Vec::new(),
             baro_velocity: Vec::new(),
+            relay_drogue: Vec::new(),
+            relay_parachute: Vec::new(),
+            pos_x: Vec::new(),
+            pos_y: Vec::new(),
+            pos_z: Vec::new(),
+            vel_x: Vec::new(),
+            vel_y: Vec::new(),
+            vel_z: Vec::new(),
+            quat_w: Vec::new(),
+            quat_x: Vec::new(),
+            quat_y: Vec::new(),
+            quat_z: Vec::new(),
             gaps: Vec::new(),
             state_segments: Vec::new(),
             timeline_markers: Vec::new(),
@@ -360,13 +384,19 @@ impl SdViewerState {
         self.battery.reserve(count);
         self.baro_altitude.reserve(count);
         self.baro_velocity.reserve(count);
+        self.relay_drogue.reserve(count);
+        self.relay_parachute.reserve(count);
+        self.pos_x.reserve(count);
+        self.pos_y.reserve(count);
+        self.pos_z.reserve(count);
+        self.vel_x.reserve(count);
+        self.vel_y.reserve(count);
+        self.vel_z.reserve(count);
+        self.quat_w.reserve(count);
+        self.quat_x.reserve(count);
+        self.quat_y.reserve(count);
+        self.quat_z.reserve(count);
 
-        let ref_pressure = Self::compute_reference_pressure(records);
-
-        const R: f64 = 287.0;
-        const G: f64 = 9.80665;
-        const ALPHA: f64 = 0.1;
-        let mut filtered_alt: Option<f64> = None;
         let mut prev_alt: Option<f64> = None;
         let mut prev_tick: Option<u32> = None;
 
@@ -382,54 +412,33 @@ impl SdViewerState {
             self.pressure.push(r.pressure_pa);
             self.temperature.push(r.temperature_c);
             self.battery.push(r.battery_voltage);
+            self.relay_drogue.push(r.relay.drogue_fired as u8 as f64);
+            self.relay_parachute.push(r.relay.parachute_fired as u8 as f64);
+            self.pos_x.push(r.pos[0]);
+            self.pos_y.push(r.pos[1]);
+            self.pos_z.push(r.pos[2]);
+            self.vel_x.push(r.vel[0]);
+            self.vel_y.push(r.vel[1]);
+            self.vel_z.push(r.vel[2]);
+            self.quat_w.push(r.quat[0]);
+            self.quat_x.push(r.quat[1]);
+            self.quat_y.push(r.quat[2]);
+            self.quat_z.push(r.quat[3]);
             if r.latitude != 0.0 || r.longitude != 0.0 {
                 self.gps_trail.push_back((r.latitude, r.longitude));
             }
 
-            if r.pressure_pa > 0.0 && ref_pressure > 0.0 {
-                let temp_k = r.temperature_c + 273.15;
-                let raw_alt = (R * temp_k / G) * (ref_pressure / r.pressure_pa).ln();
-                let filt = match filtered_alt {
-                    Some(prev) => prev + ALPHA * (raw_alt - prev),
-                    None => raw_alt,
-                };
-                filtered_alt = Some(filt);
-
-                let vel = match (prev_alt, prev_tick) {
-                    (Some(pa), Some(pt)) => {
-                        let dt = (r.tick.wrapping_sub(pt)) as f64 / 1000.0;
-                        if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
-                    }
-                    _ => 0.0,
-                };
-                prev_alt = Some(filt);
-                prev_tick = Some(r.tick);
-
-                self.baro_altitude.push(filt);
-                self.baro_velocity.push(vel);
-            } else {
-                self.baro_altitude.push(0.0);
-                self.baro_velocity.push(0.0);
-            }
-        }
-    }
-
-    fn compute_reference_pressure(records: &[SdRecord]) -> f64 {
-        let prelaunch: Vec<f64> = records.iter()
-            .filter(|r| r.state == FlightState::Prelaunch || r.state == FlightState::Calibration)
-            .take(2000)
-            .map(|r| r.pressure_pa)
-            .filter(|&p| p > 0.0)
-            .collect();
-        if prelaunch.is_empty() {
-            records.iter()
-                .take(2000)
-                .map(|r| r.pressure_pa)
-                .filter(|&p| p > 0.0)
-                .sum::<f64>()
-                / records.iter().take(2000).filter(|r| r.pressure_pa > 0.0).count().max(1) as f64
-        } else {
-            prelaunch.iter().sum::<f64>() / prelaunch.len() as f64
+            self.baro_altitude.push(r.baro_altitude);
+            let vel = match (prev_alt, prev_tick) {
+                (Some(pa), Some(pt)) => {
+                    let dt = (r.tick.wrapping_sub(pt)) as f64 / 1000.0;
+                    if dt > 0.0 { (r.baro_altitude - pa) / dt } else { 0.0 }
+                }
+                _ => 0.0,
+            };
+            prev_alt = Some(r.baro_altitude);
+            prev_tick = Some(r.tick);
+            self.baro_velocity.push(vel);
         }
     }
 
@@ -616,6 +625,18 @@ impl SdViewerState {
         self.battery.clear();
         self.baro_altitude.clear();
         self.baro_velocity.clear();
+        self.relay_drogue.clear();
+        self.relay_parachute.clear();
+        self.pos_x.clear();
+        self.pos_y.clear();
+        self.pos_z.clear();
+        self.vel_x.clear();
+        self.vel_y.clear();
+        self.vel_z.clear();
+        self.quat_w.clear();
+        self.quat_x.clear();
+        self.quat_y.clear();
+        self.quat_z.clear();
         self.gaps.clear();
         self.gps_trail.clear();
         self.selected_index = 0;
@@ -627,7 +648,7 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, prog
     let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     match source {
         DataSource::SdLog => {
-            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,flags,battery_v,state,relay,last_command")
+            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,baro_altitude,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,quat_w,quat_x,quat_y,quat_z,p_diag_0,p_diag_1,p_diag_2,p_diag_3,p_diag_4,p_diag_5,p_diag_6,p_diag_7,p_diag_8,flags,battery_v,state,relay,last_command")
                 .map_err(|e| format!("Write error: {}", e))?;
         }
         DataSource::FlashLog => {
@@ -646,7 +667,7 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, prog
                 let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
                 writeln!(
                     file,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     r.tick,
                     r.accel[0], r.accel[1], r.accel[2],
                     r.gyro[0], r.gyro[1], r.gyro[2],
@@ -659,6 +680,13 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, prog
                     r.unix_time,
                     r.milliseconds,
                     r.satellites,
+                    r.baro_altitude,
+                    r.pos[0], r.pos[1], r.pos[2],
+                    r.vel[0], r.vel[1], r.vel[2],
+                    r.quat[0], r.quat[1], r.quat[2], r.quat[3],
+                    r.p_diag[0], r.p_diag[1], r.p_diag[2],
+                    r.p_diag[3], r.p_diag[4], r.p_diag[5],
+                    r.p_diag[6], r.p_diag[7], r.p_diag[8],
                     r.flags,
                     r.battery_voltage,
                     r.state as u8,

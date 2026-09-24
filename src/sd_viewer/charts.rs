@@ -282,6 +282,98 @@ pub fn state_timeline_chart(
     None
 }
 
+pub fn altitude_chart(
+    ui: &mut egui::Ui,
+    timestamps: &[f64],
+    gps_alt: &[f64],
+    baro_alt: &[f64],
+    selected_t: Option<f64>,
+    zoom_x: Option<(f64, f64)>,
+    link_axes: bool,
+    reset: bool,
+) -> Option<f64> {
+    let pts_gps: PlotPoints = decimated_points(timestamps, gps_alt).into();
+    let pts_baro: PlotPoints = decimated_points(timestamps, baro_alt).into();
+    let ts = timestamps;
+    let gv = gps_alt;
+    let bv = baro_alt;
+    let plot_response = sd_plot("sd_altitude", link_axes, reset)
+        .label_formatter(move |hover| {
+            let x = hover_x(hover);
+            let mut lines = Vec::new();
+            if let Some(val) = lookup_by_timestamp(ts, gv, x) {
+                lines.push(format!("GPS: {:.2} m", val));
+            }
+            if let Some(val) = lookup_by_timestamp(ts, bv, x) {
+                lines.push(format!("Baro: {:.2} m", val));
+            }
+            if lines.is_empty() { None } else { Some(lines.join("\n")) }
+        })
+        .show(ui, |plot_ui| {
+            if let Some((lo, hi)) = zoom_x {
+                plot_ui.set_plot_bounds_x(lo..=hi);
+            }
+            plot_ui.line(Line::new("GPS", pts_gps));
+            plot_ui.line(Line::new("Baro", pts_baro));
+            if let Some(vline) = cursor_line(selected_t) {
+                plot_ui.vline(vline);
+            }
+        });
+    handle_click(&plot_response.response, &plot_response.transform)
+}
+
+pub fn relay_chart(
+    ui: &mut egui::Ui,
+    timestamps: &[f64],
+    drogue: &[f64],
+    parachute: &[f64],
+    selected_t: Option<f64>,
+    zoom_x: Option<(f64, f64)>,
+    link_axes: bool,
+    reset: bool,
+) -> Option<f64> {
+    let pts_d: PlotPoints = decimated_points(timestamps, drogue).into();
+    let pts_p: PlotPoints = decimated_points(timestamps, parachute).into();
+    let ts = timestamps;
+    let dv = drogue;
+    let pv = parachute;
+    let plot_response = sd_plot("sd_relay", link_axes, reset)
+        .include_y(-0.1)
+        .include_y(1.1)
+        .label_formatter(move |hover| {
+            let x = hover_x(hover);
+            let mut lines = Vec::new();
+            if let Some(val) = lookup_by_timestamp(ts, dv, x) {
+                lines.push(format!("Drogue: {}", if val > 0.5 { "FIRED" } else { "SAFE" }));
+            }
+            if let Some(val) = lookup_by_timestamp(ts, pv, x) {
+                lines.push(format!("Parachute: {}", if val > 0.5 { "FIRED" } else { "SAFE" }));
+            }
+            if lines.is_empty() { None } else { Some(lines.join("\n")) }
+        })
+        .show(ui, |plot_ui| {
+            if let Some((lo, hi)) = zoom_x {
+                plot_ui.set_plot_bounds_x(lo..=hi);
+            }
+            plot_ui.line(
+                Line::new("Drogue", pts_d)
+                    .color(egui::Color32::from_rgb(255, 165, 0))
+                    .style(egui_plot::LineStyle::Solid)
+                    .width(2.0),
+            );
+            plot_ui.line(
+                Line::new("Parachute", pts_p)
+                    .color(egui::Color32::from_rgb(0, 200, 255))
+                    .style(egui_plot::LineStyle::Solid)
+                    .width(2.0),
+            );
+            if let Some(vline) = cursor_line(selected_t) {
+                plot_ui.vline(vline);
+            }
+        });
+    handle_click(&plot_response.response, &plot_response.transform)
+}
+
 pub fn gap_timeline_chart(
     ui: &mut egui::Ui,
     gaps: &[GapInfo],

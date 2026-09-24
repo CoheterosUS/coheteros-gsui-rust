@@ -87,6 +87,15 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
     let unix_time = r.u32_le();
     let milliseconds = r.u16_le();
     let satellites = r.u8();
+    let baro_altitude = r.f32_le();
+    let pos = [r.f32_le(), r.f32_le(), r.f32_le()];
+    let vel = [r.f32_le(), r.f32_le(), r.f32_le()];
+    let quat = [r.f32_le(), r.f32_le(), r.f32_le(), r.f32_le()];
+    let p_diag = [
+        r.f32_le(), r.f32_le(), r.f32_le(),
+        r.f32_le(), r.f32_le(), r.f32_le(),
+        r.f32_le(), r.f32_le(), r.f32_le(),
+    ];
     let flags = r.u32_le();
     let battery_voltage = r.f32_le();
     let state = FlightState::from_u8(r.u8())?;
@@ -107,6 +116,11 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
         unix_time,
         milliseconds,
         satellites,
+        baro_altitude,
+        pos,
+        vel,
+        quat,
+        p_diag,
         flags,
         battery_voltage,
         state,
@@ -145,6 +159,11 @@ pub fn parse_flash_record(buf: &[u8; FLASH_RECORD_SIZE]) -> Option<SdRecord> {
         unix_time: 0,
         milliseconds: 0,
         satellites: 0,
+        baro_altitude: 0.0,
+        pos: [0.0; 3],
+        vel: [0.0; 3],
+        quat: [0.0; 4],
+        p_diag: [0.0; 9],
         flags: 0,
         battery_voltage: 0.0,
         state,
@@ -229,14 +248,13 @@ mod tests {
 
     fn make_test_sd_record() -> [u8; SD_RECORD_SIZE] {
         let mut buf = [0u8; SD_RECORD_SIZE];
-        buf[0] = 0xFE; // sync LSB
-        buf[1] = 0xCA; // sync MSB
-        buf[2..6].copy_from_slice(&500u32.to_le_bytes()); // tick
-        // accel_x = 9.81 as f32
+        buf[0] = 0xFE;
+        buf[1] = 0xCA;
+        buf[2..6].copy_from_slice(&500u32.to_le_bytes());
         buf[6..10].copy_from_slice(&9.81f32.to_le_bytes());
-        buf[77] = 0; // state = Idle
-        buf[78] = 0; // relay
-        buf[79] = 0; // command
+        buf[157] = 0; // state = Idle
+        buf[158] = 0; // relay
+        buf[159] = 0; // command
         buf[SD_RECORD_SIZE - 1] = SD_SYNC_END;
         buf
     }

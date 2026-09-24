@@ -69,38 +69,47 @@ Any agent that reads this file should not assume that any information is correct
 
 ## Flight Record (Internal, Packed)
 
-| Field          | Type   | Unit                | Notes            |
-|----------------|--------|---------------------|------------------|
-| Sync           | uint16 |                     | `0xCAFE`         |
-| Tick           | uint32 | ms                  | FreeRTOS Tick    |
-| AccelX         | float  | m/s²                |                  |
-| AccelY         | float  | m/s²                |                  |
-| AccelZ         | float  | m/s²                |                  |
-| GyroX          | float  | Degrees/s           |                  |
-| GyroY          | float  | Degrees/s           |                  |
-| GyroZ          | float  | Degrees/s           |                  |
-| MagX           | float  | Milligauss          |                  |
-| MagY           | float  | Milligauss          |                  |
-| MagZ           | float  | Milligauss          |                  |
-| PressurePa     | float  | Pascals             |                  |
-| TemperatureC   | float  | Celsius             |                  |
-| Latitude       | int32  | Degrees × 10^7      |                  |
-| Longitude      | int32  | Degrees × 10^7      |                  |
-| GPSAltitude    | float  | Meters              |                  |
-| UnixTime       | uint32 | Epoch Seconds       |                  |
-| Milliseconds   | uint16 | 0–999               |                  |
-| Satellites     | uint8  | Count               |                  |
-| BaroAltitude   | float  | Meters              |                  |
-| BaroVelocity   | float  | m/s                 |                  |
-| VelX           | float  | m/s                 |                  |
-| VelY           | float  | m/s                 |                  |
-| VelZ           | float  | m/s                 |                  |
-| FaultFlags     | uint32 | Bitmask             | SystemFaultFlags |
-| BatteryVoltage | float  | Volts               |                  |
-| State          | uint8  | SystemState         |                  |
-| RelayState     | uint8  | Bitmask             | RelayState       |
-| LastCommand    | uint8  | CommandType         | Persists         |
-| SyncEnd        | uint8  |                     | `0xBE`           |
+| Field          | Type     | Unit            | Notes            |
+|----------------|----------|-----------------|------------------|
+| Sync           | uint16   |                 | `0xCAFE`         |
+| Tick           | uint32   | ms              | FreeRTOS Tick    |
+| AccelX         | float    | m/s²            |                  |
+| AccelY         | float    | m/s²            |                  |
+| AccelZ         | float    | m/s²            |                  |
+| GyroX          | float    | Degrees/s       |                  |
+| GyroY          | float    | Degrees/s       |                  |
+| GyroZ          | float    | Degrees/s       |                  |
+| MagX           | float    | Milligauss      |                  |
+| MagY           | float    | Milligauss      |                  |
+| MagZ           | float    | Milligauss      |                  |
+| PressurePa     | float    | Pascals         |                  |
+| TemperatureC   | float    | Celsius         |                  |
+| Latitude       | int32    | Degrees × 10^7 |                  |
+| Longitude      | int32    | Degrees × 10^7 |                  |
+| GPSAltitude    | float    | Meters          |                  |
+| UnixTime       | uint32   | Epoch Seconds   |                  |
+| Milliseconds   | uint16   | 0-999           |                  |
+| Satellites     | uint8    | Count           |                  |
+| BaroAltitude   | float    | Meters          |                  |
+| BaroVelocity   | float    | m/s             |                  |
+| GPSVelocity    | float    | m/s             |                  |
+| PosX           | float    | Meters          | Kalman NED       |
+| PosY           | float    | Meters          | Kalman NED       |
+| PosZ           | float    | Meters          | Kalman NED       |
+| VelX           | float    | m/s             | Kalman NED       |
+| VelY           | float    | m/s             | Kalman NED       |
+| VelZ           | float    | m/s             | Kalman NED       |
+| QuatW          | float    |                 | Kalman attitude  |
+| QuatX          | float    |                 | Kalman attitude  |
+| QuatY          | float    |                 | Kalman attitude  |
+| QuatZ          | float    |                 | Kalman attitude  |
+| PDiag[9]       | float[9] |                 | P matrix diag    |
+| FaultFlags     | uint32   | Bitmask         | SystemFaultFlags |
+| BatteryVoltage | float    | Volts           |                  |
+| State          | uint8    | SystemState     |                  |
+| RelayState     | uint8    | Bitmask         | RelayState       |
+| LastCommand    | uint8    | CommandType     | Persists         |
+| SyncEnd        | uint8    |                 | `0xBE`           |
 
 ## Command Frame (Structure, Packed)
 
@@ -196,37 +205,49 @@ Command `0x10` (COMMAND_HIL_DATA). Received over UART from external device (Lapt
 
 ## Wire SD Log Record (Structure, Packed)
 
-| Offset | Size | Type    | Field          | Encoding             |
-|--------|------|---------|----------------|----------------------|
-| 0      | 2    | uint16  | Sync           | `0xCAFE`             |
-| 2      | 4    | uint32  | Tick           | Raw                  |
-| 6      | 4    | float32 | AccelX         | Native               |
-| 10     | 4    | float32 | AccelY         | Native               |
-| 14     | 4    | float32 | AccelZ         | Native               |
-| 18     | 4    | float32 | GyroX          | Native               |
-| 22     | 4    | float32 | GyroY          | Native               |
-| 26     | 4    | float32 | GyroZ          | Native               |
-| 30     | 4    | float32 | MagX           | Native               |
-| 34     | 4    | float32 | MagY           | Native               |
-| 38     | 4    | float32 | MagZ           | Native               |
-| 42     | 4    | float32 | PressurePa     | Native               |
-| 46     | 4    | float32 | TemperatureC   | Native               |
-| 50     | 4    | int32   | Latitude       | ×10^7                |
-| 54     | 4    | int32   | Longitude      | ×10^7                |
-| 58     | 4    | float32 | GPSAltitude    | Native               |
-| 62     | 4    | uint32  | UnixTime       | Epoch Seconds        |
-| 66     | 2    | uint16  | Milliseconds   | 0–999                |
-| 68     | 1    | uint8   | Satellites     | Raw                  |
-| 69     | 4    | uint32  | Flags          | Bitmask              |
-| 73     | 4    | float32 | BatteryVoltage | Native               |
-| 77     | 1    | uint8   | State          | Enum                 |
-| 78     | 1    | uint8   | RelayState     | Bitmask              |
-| 79     | 1    | uint8   | LastCommand    | Enum                 |
-| 80     | 1    | uint8   | SyncEnd        | `0xBE`               |
+| Offset | Size | Type    | Field              | Encoding      |
+|--------|------|---------|--------------------|---------------|
+| 0      | 2    | uint16  | Sync               | `0xCAFE`      |
+| 2      | 4    | uint32  | Tick               | Raw           |
+| 6      | 4    | float32 | AccelX             | Native        |
+| 10     | 4    | float32 | AccelY             | Native        |
+| 14     | 4    | float32 | AccelZ             | Native        |
+| 18     | 4    | float32 | GyroX              | Native        |
+| 22     | 4    | float32 | GyroY              | Native        |
+| 26     | 4    | float32 | GyroZ              | Native        |
+| 30     | 4    | float32 | MagX               | Native        |
+| 34     | 4    | float32 | MagY               | Native        |
+| 38     | 4    | float32 | MagZ               | Native        |
+| 42     | 4    | float32 | PressurePa         | Native        |
+| 46     | 4    | float32 | TemperatureC       | Native        |
+| 50     | 4    | int32   | Latitude           | x10^7         |
+| 54     | 4    | int32   | Longitude          | x10^7         |
+| 58     | 4    | float32 | GPSAltitude        | Native        |
+| 62     | 4    | uint32  | UnixTime           | Epoch Seconds |
+| 66     | 2    | uint16  | Milliseconds       | 0-999         |
+| 68     | 1    | uint8   | Satellites         | Raw           |
+| 69     | 4    | float32 | BarometricAltitude | Native        |
+| 73     | 4    | float32 | PosX               | Native        |
+| 77     | 4    | float32 | PosY               | Native        |
+| 81     | 4    | float32 | PosZ               | Native        |
+| 85     | 4    | float32 | VelX               | Native        |
+| 89     | 4    | float32 | VelY               | Native        |
+| 93     | 4    | float32 | VelZ               | Native        |
+| 97     | 4    | float32 | QuatW              | Native        |
+| 101    | 4    | float32 | QuatX              | Native        |
+| 105    | 4    | float32 | QuatY              | Native        |
+| 109    | 4    | float32 | QuatZ              | Native        |
+| 113    | 36   | float32 | PDiag[9]           | Native        |
+| 149    | 4    | uint32  | Flags              | Bitmask       |
+| 153    | 4    | float32 | BatteryVoltage     | Native        |
+| 157    | 1    | uint8   | State              | Enum          |
+| 158    | 1    | uint8   | RelayState         | Bitmask       |
+| 159    | 1    | uint8   | LastCommand        | Enum          |
+| 160    | 1    | uint8   | SyncEnd            | `0xBE`        |
 
 ## Wire Flash Log Record (Structure, Packed)
 
-Stored on W25Q32JV external flash at 10 Hz. 8 records per 256-byte page. Flight boundaries detected by tick reset (tick decreases between consecutive records).
+Stored on W25Q32JV external flash at 10 Hz. 8 records per 256-byte page. Flight boundaries marked by a marker record where State = `0xFF` and all sensor fields are zero. Marker is page-aligned (occupies first 32 bytes of a 256-byte page, rest is `0xFF` padding).
 
 | Offset | Size | Type    | Field    | Encoding |
 |--------|------|---------|----------|----------|
