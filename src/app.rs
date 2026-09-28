@@ -4,7 +4,6 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::csv_recorder::CsvRecorder;
 use crate::sd_log::record::{SD_RECORD_FIELDS, FLASH_RECORD_FIELDS};
-use crate::sd_viewer::state::DataSource;
 use crate::sd_viewer::state::SdViewerState;
 use crate::serial::worker::{SerialCommand, SerialEvent};
 use crate::state::AppState;
@@ -16,6 +15,7 @@ use crate::ui::theme;
 enum ActiveTab {
     LiveTelemetry,
     SdViewer,
+    CsvReplay,
 }
 
 pub struct GroundStationApp {
@@ -30,6 +30,7 @@ pub struct GroundStationApp {
     logo_texture: Option<egui::TextureHandle>,
     active_tab: ActiveTab,
     sd_viewer: SdViewerState,
+    csv_viewer: SdViewerState,
 }
 
 impl GroundStationApp {
@@ -63,6 +64,7 @@ impl GroundStationApp {
             logo_texture,
             active_tab: ActiveTab::LiveTelemetry,
             sd_viewer: SdViewerState::new(),
+            csv_viewer: SdViewerState::new(),
         }
     }
 
@@ -351,7 +353,6 @@ impl GroundStationApp {
                         current_gps,
                         self.state.ground_pos,
                         &mut self.map_state,
-                        0.0,
                     );
 
                     if let Some(ref t) = t {
@@ -527,651 +528,6 @@ impl GroundStationApp {
             });
         });
     }
-
-    fn render_sd_viewer(&mut self, root_ui: &mut egui::Ui) {
-        let dm = self.state.dark_mode;
-        let tc = theme::current_theme(dm);
-
-        self.sd_viewer.init_map(root_ui.ctx());
-
-        if self.sd_viewer.poll_task() {
-            root_ui.ctx().request_repaint();
-        }
-
-        if self.sd_viewer.replay_playing {
-            let wall_now = root_ui.ctx().input(|i| i.time);
-            self.sd_viewer.tick_replay(wall_now);
-            root_ui.ctx().request_repaint();
-        }
-
-        // === DRAG & DROP ===
-        let dropped_file = root_ui.ctx().input(|i| {
-            i.raw.dropped_files.iter().find_map(|f| {
-                let p = f.path();
-                let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if ext.eq_ignore_ascii_case("bin") {
-                    Some(p.display().to_string())
-                } else {
-                    None
-                }
-            })
-        });
-        if let Some(path) = dropped_file {
-            self.sd_viewer.load_file(&path);
-        }
-
-        // === SD TOP BAR ===
-        egui::Panel::top("sd_top_bar")
-            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
-            .show(root_ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                if ui.button("OPEN FILE").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Binary", &["bin"])
-                        .add_filter("All", &["*"])
-                        .pick_file()
-                    {
-                        self.sd_viewer.load_file(&path.display().to_string());
-                    }
-                }
-
-                if let Some(ref path) = self.sd_viewer.file_path.clone() {
-                    if ui.button("CLOSE").clicked() {
-                        self.sd_viewer.close_file();
-                    }
-                    if ui.add_enabled(!self.sd_viewer.is_busy(), egui::Button::new(
-                        egui::RichText::new("EXPORT CSV").color(egui::Color32::WHITE),
-                    ).fill(tc.green)).clicked() {
-                        let default_name = std::path::Path::new(path)
-                            .file_stem()
-                            .map(|s| format!("{}.csv", s.to_string_lossy()))
-                            .unwrap_or_else(|| "export.csv".to_string());
-                        if let Some(save_path) = rfd::FileDialog::new()
-                            .set_file_name(&default_name)
-                            .add_filter("CSV", &["csv"])
-                            .save_file()
-                        {
-                            self.sd_viewer.start_export(&save_path.display().to_string());
-                        }
-                    }
-                    ui.separator();
-                    ui.label(egui::RichText::new(path).family(egui::FontFamily::Monospace));
-                    ui.separator();
-                    let source_label = match self.sd_viewer.data_source {
-                        DataSource::SdLog => "SD",
-                        DataSource::FlashLog => "FLASH",
-                    };
-                    ui.label(format!("{} {} RECORDS", self.sd_viewer.records.len(), source_label));
-                    ui.separator();
-                    let dur = self.sd_viewer.duration_secs();
-                    let mins = (dur / 60.0) as u32;
-                    let secs = dur % 60.0;
-                    ui.label(format!("DURATION: {:02}:{:04.1}", mins, secs));
-                }
-
-                if let Some(ref err) = self.sd_viewer.error {
-                    ui.separator();
-                    ui.colored_label(tc.red_accent, err.as_str());
-                }
-
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let border_color = if self.sd_viewer.link_axes { tc.accent } else { tc.label_color };
-                    let checkbox_stroke = egui::Stroke::new(1.5, border_color);
-                    ui.scope(|ui| {
-                        let visuals = &mut ui.style_mut().visuals;
-                        visuals.widgets.inactive.bg_stroke = checkbox_stroke;
-                        visuals.widgets.hovered.bg_stroke = checkbox_stroke;
-                        visuals.widgets.active.bg_stroke = checkbox_stroke;
-                        ui.checkbox(&mut self.sd_viewer.link_axes, "SYNC AXES");
-                    });
-                });
-            });
-        });
-
-        if self.sd_viewer.records.is_empty() {
-            egui::CentralPanel::default().show(root_ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.3);
-                    ui.label(egui::RichText::new("OPEN OR DROP A .BIN FILE TO VIEW SD / FLASH LOG DATA")
-                        .size(18.0)
-                        .color(tc.label_color));
-                    ui.add_space(20.0);
-                    let hint_color = tc.label_color.gamma_multiply(0.6);
-                    for hint in [
-                        "SCROLL TO ZOOM CHARTS, DRAG TO PAN",
-                        "DOUBLE CLICK TO RESET ZOOM",
-                        "CLICK A FLIGHT STATE SEGMENT TO ZOOM ALL CHARTS TO IT",
-                        "CLICK SAME SEGMENT TO RESET ZOOM",
-                        "CLICK ANY CHART TO SELECT A RECORD",
-                        "\"SYNC AXES\" CHECKBOX LINKS PAN/ZOOM ACROSS CHARTS",
-                    ] {
-                        ui.label(egui::RichText::new(hint).size(13.0).color(hint_color));
-                    }
-                });
-            });
-            return;
-        }
-
-        // === SD BOTTOM: Timeline scrubber + Replay controls ===
-        egui::Panel::bottom("sd_scrubber")
-            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
-            .show(root_ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("RECORD");
-                let max = self.sd_viewer.records.len().saturating_sub(1);
-                ui.add(egui::Slider::new(&mut self.sd_viewer.selected_index, 0..=max)
-                    .show_value(true));
-
-                if let Some(r) = self.sd_viewer.selected_record() {
-                    if self.sd_viewer.has_full_data() {
-                        if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
-                            ui.separator();
-                            ui.label(egui::RichText::new(dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string())
-                                .family(egui::FontFamily::Monospace));
-                        }
-                    }
-                    ui.separator();
-                    ui.label(format!("TICK: {}", r.tick));
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    use crate::sd_viewer::state::REPLAY_SPEEDS;
-
-                    let speed = REPLAY_SPEEDS[self.sd_viewer.replay_speed_index];
-                    let speed_text = if speed == speed.floor() {
-                        format!("x{:.0}", speed)
-                    } else {
-                        format!("x{:.1}", speed)
-                    };
-                    ui.label(egui::RichText::new(speed_text)
-                        .family(egui::FontFamily::Name("Bold".into()))
-                        .size(12.0)
-                        .color(tc.accent));
-
-                    let speed_idx = self.sd_viewer.replay_speed_index;
-                    if ui.add_enabled(speed_idx < REPLAY_SPEEDS.len() - 1, egui::Button::new(
-                        egui::RichText::new("\u{23E9}").size(13.0),
-                    )).on_hover_text("FASTER").clicked() {
-                        self.sd_viewer.replay_speed_index = (speed_idx + 1).min(REPLAY_SPEEDS.len() - 1);
-                    }
-
-                    if ui.button(egui::RichText::new("\u{23F9}").size(13.0))
-                        .on_hover_text("STOP")
-                        .clicked()
-                    {
-                        self.sd_viewer.replay_playing = false;
-                        self.sd_viewer.replay_last_wall = None;
-                        self.sd_viewer.selected_index = 0;
-                    }
-
-                    let play_label = if self.sd_viewer.replay_playing { "\u{23F8}" } else { "\u{25B6}" };
-                    if ui.button(egui::RichText::new(play_label).size(13.0))
-                        .on_hover_text(if self.sd_viewer.replay_playing { "PAUSE" } else { "PLAY" })
-                        .clicked()
-                    {
-                        self.sd_viewer.replay_playing = !self.sd_viewer.replay_playing;
-                        if self.sd_viewer.replay_playing {
-                            self.sd_viewer.replay_last_wall = None;
-                            if self.sd_viewer.selected_index >= self.sd_viewer.records.len().saturating_sub(1) {
-                                self.sd_viewer.selected_index = 0;
-                            }
-                        }
-                    }
-
-                    if ui.add_enabled(speed_idx > 0, egui::Button::new(
-                        egui::RichText::new("\u{23EA}").size(13.0),
-                    )).on_hover_text("SLOWER").clicked() {
-                        self.sd_viewer.replay_speed_index = speed_idx.saturating_sub(1);
-                    }
-                });
-            });
-        });
-
-        let has_full = self.sd_viewer.has_full_data();
-
-        // === MAP (right panel) ===
-        if has_full {
-        egui::Panel::right("sd_map_panel")
-            .default_size(300.0)
-            .min_size(250.0)
-            .resizable(true)
-            .show(root_ui, |ui| {
-                theme::bordered_section(ui, "ATTITUDE", tc.accent, dm, |ui| {
-                    let idx = self.sd_viewer.selected_index;
-                    let q = [
-                        self.sd_viewer.quat_w.get(idx).copied().unwrap_or(1.0),
-                        self.sd_viewer.quat_x.get(idx).copied().unwrap_or(0.0),
-                        self.sd_viewer.quat_y.get(idx).copied().unwrap_or(0.0),
-                        self.sd_viewer.quat_z.get(idx).copied().unwrap_or(0.0),
-                    ];
-                    ui::rocket3d::rocket_attitude(ui, q, dm);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
-                    let current_gps = self.sd_viewer.selected_record()
-                        .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
-                        .map(|r| (r.latitude, r.longitude));
-                    if let Some(ref mut map_state) = self.sd_viewer.map_state {
-                        if self.sd_viewer.lock_gps {
-                            map_state.memory.follow_my_position();
-                        }
-                        ui.horizontal(|ui| {
-                            let border_color = if self.sd_viewer.lock_gps { tc.accent } else { tc.label_color };
-                            let checkbox_stroke = egui::Stroke::new(1.5, border_color);
-                            ui.scope(|ui| {
-                                let visuals = &mut ui.style_mut().visuals;
-                                visuals.widgets.inactive.bg_stroke = checkbox_stroke;
-                                visuals.widgets.hovered.bg_stroke = checkbox_stroke;
-                                visuals.widgets.active.bg_stroke = checkbox_stroke;
-                                ui.checkbox(&mut self.sd_viewer.lock_gps, "LOCK ON GPS");
-                            });
-                        });
-                        ui.add_space(4.0);
-                        let partial_trail: std::collections::VecDeque<(f64, f64)> = self.sd_viewer.records[..=self.sd_viewer.selected_index]
-                            .iter()
-                            .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
-                            .map(|r| (r.latitude, r.longitude))
-                            .collect();
-                        let map_rect = ui::map::gps_map(
-                            ui,
-                            &partial_trail,
-                            current_gps,
-                            None,
-                            map_state,
-                            0.0,
-                        );
-
-                        if let Some(r) = self.sd_viewer.selected_record() {
-                            let overlay_width = 195.0;
-                            let overlay_height = 100.0;
-                            let overlay_pos = egui::pos2(
-                                map_rect.right() - overlay_width - 4.0,
-                                map_rect.bottom() - overlay_height - 4.0,
-                            );
-                            let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
-
-                            let painter = ui.painter();
-                            let overlay_bg = if dm {
-                                egui::Color32::from_black_alpha(220)
-                            } else {
-                                egui::Color32::from_white_alpha(220)
-                            };
-                            painter.rect_filled(overlay_rect, 2.0, overlay_bg);
-
-                            let s = 14.0;
-                            let mut y = overlay_rect.top() + 5.0;
-                            let x_label = overlay_rect.left() + 8.0;
-                            let x_value = overlay_rect.left() + 44.0;
-                            let line_h = 18.0;
-
-                            let font = egui::FontId::monospace(s);
-                            let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
-
-                            let rows: &[(&str, String, egui::Color32)] = &[
-                                ("LAT", format!("{:.6}\u{00b0}", r.latitude), tc.value_color),
-                                ("LON", format!("{:.6}\u{00b0}", r.longitude), tc.value_color),
-                                ("ALT", format!("{:.1} m", r.gps_altitude), tc.value_color),
-                                ("SAT", format!("{}", r.satellites), if r.satellites >= 4 { tc.green } else { tc.red_accent }),
-                            ];
-                            for (label, value, color) in rows {
-                                painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
-                                painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
-                                y += line_h;
-                            }
-
-                            let link_rect = egui::Rect::from_min_size(
-                                egui::pos2(x_label, y),
-                                egui::vec2(overlay_width - 16.0, line_h),
-                            );
-                            let link_resp = ui.interact(link_rect, ui.id().with("sd_gmaps_link"), egui::Sense::click());
-                            let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
-                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
-                            if link_resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            if link_resp.clicked() {
-                                let url = format!("https://www.google.com/maps?q={},{}", r.latitude, r.longitude);
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
-                            }
-                        }
-                    }
-
-                });
-            });
-        } // has_full (map panel)
-
-        // === CENTER: Data grid (sticky) + Charts (scrollable) ===
-        egui::CentralPanel::default().show(root_ui, |ui| {
-            let r = self.sd_viewer.selected_record().cloned();
-
-            if has_full {
-                ui.columns(4, |cols| {
-                    theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
-                            theme::data_row(ui, "STATE", &format!("{}", r.state), dm);
-                            theme::data_row(ui, "FLAGS", &format!("{}", r.flags), dm);
-                            theme::data_row(ui, "LAST COMMAND", &format!("{}", r.last_command), dm);
-                            let drogue_color = if r.relay.drogue_fired { tc.red_accent } else { tc.green };
-                            theme::data_row_colored(ui, "DROGUE", if r.relay.drogue_fired { "FIRED" } else { "SAFE" }, drogue_color, dm);
-                            let chute_color = if r.relay.parachute_fired { tc.red_accent } else { tc.green };
-                            theme::data_row_colored(ui, "PARACHUTE", if r.relay.parachute_fired { "FIRED" } else { "SAFE" }, chute_color, dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[1], "POSITION", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", r.gps_altitude), dm);
-                            let idx = self.sd_viewer.selected_index;
-                            let baro_alt = self.sd_viewer.baro_altitude.get(idx).copied().unwrap_or(0.0);
-                            let baro_vel = self.sd_viewer.baro_velocity.get(idx).copied().unwrap_or(0.0);
-                            theme::data_row(ui, "BARO ALT", &format!("{:.2} m", baro_alt), dm);
-                            theme::data_row(ui, "BARO VEL", &format!("{:.2} m/s", baro_vel), dm);
-                            theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", r.latitude), dm);
-                            theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", r.longitude), dm);
-                            theme::data_row(ui, "SATELLITES", &format!("{}", r.satellites), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[2], "SENSORS", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "PRESSURE", &format!("{:.0} Pa", r.pressure_pa), dm);
-                            theme::data_row(ui, "TEMPERATURE", &format!("{:.2} \u{00b0}C", r.temperature_c), dm);
-                            theme::data_row(ui, "BATTERY", &format!("{:.2} V", r.battery_voltage), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[3], "MAGNETOMETER", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "MAG X", &format!("{:.2} mG", r.mag[0]), dm);
-                            theme::data_row(ui, "MAG Y", &format!("{:.2} mG", r.mag[1]), dm);
-                            theme::data_row(ui, "MAG Z", &format!("{:.2} mG", r.mag[2]), dm);
-                        }
-                    });
-                });
-
-                ui.add_space(4.0);
-
-                ui.columns(4, |cols| {
-                    theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            let fault_list = [
-                                ("BMP280", r.flags & 0x03),
-                                ("BMP581", r.flags & 0x0C),
-                                ("IIM42653", r.flags & 0x30),
-                                ("IIS2MDCTR", r.flags & 0xC0),
-                                ("SD", r.flags & 0x300),
-                            ];
-                            for (name, bits) in fault_list {
-                                let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
-                                theme::data_row_colored(ui, name, status, color, dm);
-                            }
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
-                            theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
-                            theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", r.accel[2]), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
-                            theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
-                            theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", r.gyro[2]), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[3], "TIMESTAMP", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "UNIX TIME", &format!("{}", r.unix_time), dm);
-                            theme::data_row(ui, "MILLIS", &format!("{}", r.milliseconds), dm);
-                            if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
-                                theme::data_row(ui, "UTC", &dt.format("%H:%M:%S%.3f").to_string(), dm);
-                            }
-                        }
-                    });
-                });
-            } else {
-                ui.columns(3, |cols| {
-                    theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
-                            theme::data_row(ui, "STATE", &format!("{}", r.state), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
-                            theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
-                            theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", r.accel[2]), dm);
-                        }
-                    });
-
-                    theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
-                        if let Some(ref r) = r {
-                            theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
-                            theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
-                            theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", r.gyro[2]), dm);
-                        }
-                    });
-                });
-            }
-
-                ui.add_space(4.0);
-
-            egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
-                let selected_t = self.sd_viewer.timestamps.get(self.sd_viewer.selected_index).copied();
-                let zoom_x = self.sd_viewer.zoom_x.take();
-                let reset = std::mem::take(&mut self.sd_viewer.reset_zoom);
-                let link_axes = self.sd_viewer.link_axes;
-
-                use crate::sd_viewer::charts;
-                let mut clicked_ts: Option<f64> = None;
-                let mut new_zoom: Option<(f64, f64)> = None;
-
-                let na_label = |ui: &mut egui::Ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(60.0);
-                        ui.label(egui::RichText::new("NOT AVAILABLE")
-                            .size(16.0)
-                            .color(tc.label_color.gamma_multiply(0.5)));
-                        ui.add_space(60.0);
-                    });
-                };
-
-                theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
-                    if let Some(click) = charts::state_timeline_chart(ui, &self.sd_viewer.state_segments, &self.sd_viewer.timeline_markers, selected_t, zoom_x, link_axes, reset) {
-                        match click {
-                            charts::TimelineClick::Segment { start, end } => {
-                                if self.sd_viewer.zoomed_segment == Some((start, end)) {
-                                    self.sd_viewer.zoomed_segment = None;
-                                    self.sd_viewer.reset_zoom = true;
-                                } else {
-                                    let padding = (end - start) * 0.05;
-                                    new_zoom = Some((start - padding, end + padding));
-                                    self.sd_viewer.zoomed_segment = Some((start, end));
-                                }
-                            }
-                            charts::TimelineClick::Point(t) => {
-                                clicked_ts = Some(t);
-                            }
-                        }
-                    }
-                });
-                ui.add_space(4.0);
-                {
-                    let gap_count = self.sd_viewer.gaps.len();
-                    let total_dropped: u64 = self.sd_viewer.gaps.iter().map(|g| g.dropped).sum();
-                    let label = if gap_count > 0 {
-                        format!("SAMPLE GAPS — {} GAPS, ~{} DROPPED", gap_count, total_dropped)
-                    } else {
-                        "SAMPLE GAPS — NONE".to_string()
-                    };
-                    theme::bordered_section(ui, &label, tc.accent, dm, |ui| {
-                        let duration = self.sd_viewer.duration_secs();
-                        if let Some(t) = charts::gap_timeline_chart(ui, &self.sd_viewer.gaps, duration, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    });
-                }
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::altitude_chart(ui, &self.sd_viewer.timestamps, &self.sd_viewer.gps_altitude, &self.sd_viewer.baro_altitude, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "BARO VELOCITY", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &self.sd_viewer.timestamps, &self.sd_viewer.baro_velocity, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &self.sd_viewer.timestamps, &self.sd_viewer.accel_x, &self.sd_viewer.accel_y, &self.sd_viewer.accel_z, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &self.sd_viewer.timestamps, &self.sd_viewer.gyro_x, &self.sd_viewer.gyro_y, &self.sd_viewer.gyro_z, selected_t, zoom_x, link_axes, reset) {
-                        clicked_ts = Some(t);
-                    }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "KALMAN POSITION (NED)", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::triple_series_chart(ui, "sd_pos", "m", &self.sd_viewer.timestamps, &self.sd_viewer.pos_x, &self.sd_viewer.pos_y, &self.sd_viewer.pos_z, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "KALMAN VELOCITY (NED)", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::triple_series_chart(ui, "sd_vel", "m/s", &self.sd_viewer.timestamps, &self.sd_viewer.vel_x, &self.sd_viewer.vel_y, &self.sd_viewer.vel_z, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &self.sd_viewer.timestamps, &self.sd_viewer.pressure, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &self.sd_viewer.timestamps, &self.sd_viewer.temperature, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &self.sd_viewer.timestamps, &self.sd_viewer.battery, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "RELAYS", tc.accent, dm, |ui| {
-                    if has_full {
-                        if let Some(t) = charts::relay_chart(ui, &self.sd_viewer.timestamps, &self.sd_viewer.relay_drogue, &self.sd_viewer.relay_parachute, selected_t, zoom_x, link_axes, reset) {
-                            clicked_ts = Some(t);
-                        }
-                    } else { na_label(ui); }
-                });
-
-                if let Some(z) = new_zoom {
-                    self.sd_viewer.zoom_x = Some(z);
-                }
-
-                if let Some(t) = clicked_ts {
-                    self.sd_viewer.selected_index = charts::timestamp_to_index(&self.sd_viewer.timestamps, t);
-                }
-
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "RAW RECORD", tc.accent, dm, |ui| {
-                    if let Some(ref r) = r {
-                        let fields = if has_full { SD_RECORD_FIELDS } else { FLASH_RECORD_FIELDS };
-                        ui::hex_viewer::hex_viewer(ui, &r.raw, fields, dm);
-                    } else {
-                        ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
-                    }
-                });
-            }); // ScrollArea
-        });
-
-        if let Some(ref label) = self.sd_viewer.bg_label.clone() {
-            let frac = self.sd_viewer.progress_fraction();
-            let pct = (frac * 100.0) as u32;
-            let current = self.sd_viewer.progress_current();
-            let total = self.sd_viewer.bg_total;
-            let is_export = label == "EXPORTING";
-            let eta_text = match self.sd_viewer.progress_eta_secs() {
-                Some(secs) if secs >= 60.0 => format!("ETA {}m{:02}s", secs as u64 / 60, secs as u64 % 60),
-                Some(secs) => format!("ETA {:.0}s", secs),
-                None => String::new(),
-            };
-            egui::Window::new(label.as_str())
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(root_ui.ctx(), |ui| {
-                    ui.set_min_width(300.0);
-                    ui.label(format!("{} / {} ({}%)", current, total, pct));
-                    if !eta_text.is_empty() {
-                        ui.label(&eta_text);
-                    }
-                    ui.add(egui::ProgressBar::new(frac).desired_height(8.0));
-                    if is_export {
-                        ui.add_space(4.0);
-                        if ui.button("CANCEL").clicked() {
-                            self.sd_viewer.cancel_export();
-                        }
-                    }
-                });
-        }
-
-        if self.sd_viewer.status_message.is_some() {
-            let mut open = true;
-            let msg = self.sd_viewer.status_message.clone().unwrap();
-            let export_dir = self.sd_viewer.last_export_dir.clone();
-            egui::Window::new("DONE")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(root_ui.ctx(), |ui| {
-                    ui.label(egui::RichText::new(&msg).size(14.0));
-                    if let Some(ref dir) = export_dir {
-                        ui.add_space(4.0);
-                        if ui.button("OPEN DIRECTORY").clicked() {
-                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
-                        }
-                    }
-                });
-            if !open {
-                self.sd_viewer.status_message = None;
-                self.sd_viewer.last_export_dir = None;
-            }
-        }
-    }
 }
 
 impl eframe::App for GroundStationApp {
@@ -1307,6 +663,7 @@ impl eframe::App for GroundStationApp {
                     let tabs = [
                         (ActiveTab::LiveTelemetry, "LIVE TELEMETRY"),
                         (ActiveTab::SdViewer, "FLASH/SD VIEWER"),
+                        (ActiveTab::CsvReplay, "CSV REPLAY"),
                     ];
 
                     for (tab, label) in tabs {
@@ -1324,8 +681,14 @@ impl eframe::App for GroundStationApp {
                         .stroke(egui::Stroke::new(2.0, border_color))
                         .corner_radius(0.0);
 
-                        if ui.add(button).clicked() {
+                        if ui.add(button).clicked() && self.active_tab != tab {
                             self.active_tab = tab;
+                            // Viewers share the chart axis-link group; re-fit to this tab's data.
+                            match tab {
+                                ActiveTab::SdViewer => self.sd_viewer.reset_zoom = true,
+                                ActiveTab::CsvReplay => self.csv_viewer.reset_zoom = true,
+                                ActiveTab::LiveTelemetry => {}
+                            }
                         }
                     }
 
@@ -1344,7 +707,671 @@ impl eframe::App for GroundStationApp {
 
         match self.active_tab {
             ActiveTab::LiveTelemetry => self.render_live_telemetry(root_ui),
-            ActiveTab::SdViewer => self.render_sd_viewer(root_ui),
+            ActiveTab::SdViewer => render_log_viewer(&mut self.sd_viewer, root_ui, dm, ViewerKind::SdFlash),
+            ActiveTab::CsvReplay => render_log_viewer(&mut self.csv_viewer, root_ui, dm, ViewerKind::Csv),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum ViewerKind {
+    SdFlash,
+    Csv,
+}
+
+impl ViewerKind {
+    fn panel_id(self, name: &str) -> egui::Id {
+        egui::Id::new((self.id_salt(), name))
+    }
+
+    fn id_salt(self) -> &'static str {
+        match self {
+            ViewerKind::SdFlash => "sd_viewer",
+            ViewerKind::Csv => "csv_viewer",
+        }
+    }
+
+    fn file_ext(self) -> &'static str {
+        match self {
+            ViewerKind::SdFlash => "bin",
+            ViewerKind::Csv => "csv",
+        }
+    }
+
+    fn filter_name(self) -> &'static str {
+        match self {
+            ViewerKind::SdFlash => "Binary",
+            ViewerKind::Csv => "CSV",
+        }
+    }
+
+    fn empty_hint(self) -> &'static str {
+        match self {
+            ViewerKind::SdFlash => "OPEN OR DROP A .BIN FILE TO VIEW SD / FLASH LOG DATA",
+            ViewerKind::Csv => "OPEN OR DROP A .CSV FILE (TELEMETRY RECORDING OR SD/FLASH EXPORT) TO REPLAY",
+        }
+    }
+
+    fn load(self, v: &mut SdViewerState, path: &str) {
+        match self {
+            ViewerKind::SdFlash => v.load_file(path),
+            ViewerKind::Csv => v.load_csv_file(path),
+        }
+    }
+}
+
+fn render_log_viewer(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bool, kind: ViewerKind) {
+    // Scope under a per-viewer id so plot/scroll memory isn't shared between tabs.
+    root_ui.push_id(kind.id_salt(), |root_ui| render_log_viewer_inner(v, root_ui, dm, kind));
+}
+
+fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bool, kind: ViewerKind) {
+    let tc = theme::current_theme(dm);
+
+    v.init_map(root_ui.ctx());
+
+    if v.poll_task() {
+        root_ui.ctx().request_repaint();
+    }
+
+    if v.replay_playing {
+        let wall_now = root_ui.ctx().input(|i| i.time);
+        v.tick_replay(wall_now);
+        root_ui.ctx().request_repaint();
+    }
+
+    // === DRAG & DROP ===
+    let dropped_file = root_ui.ctx().input(|i| {
+        i.raw.dropped_files.iter().find_map(|f| {
+            let p = f.path();
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext.eq_ignore_ascii_case(kind.file_ext()) {
+                Some(p.display().to_string())
+            } else {
+                None
+            }
+        })
+    });
+    if let Some(path) = dropped_file {
+        kind.load(v, &path);
+    }
+
+    // === SD TOP BAR ===
+    egui::Panel::top(kind.panel_id("top_bar"))
+        .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
+        .show(root_ui, |ui| {
+        ui.horizontal_centered(|ui| {
+            if ui.button("OPEN FILE").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter(kind.filter_name(), &[kind.file_ext()])
+                    .add_filter("All", &["*"])
+                    .pick_file()
+                {
+                    kind.load(v, &path.display().to_string());
+                }
+            }
+
+            if let Some(ref path) = v.file_path.clone() {
+                if ui.button("CLOSE").clicked() {
+                    v.close_file();
+                }
+                if kind == ViewerKind::SdFlash && ui.add_enabled(!v.is_busy(), egui::Button::new(
+                    egui::RichText::new("EXPORT CSV").color(egui::Color32::WHITE),
+                ).fill(tc.green)).clicked() {
+                    let default_name = std::path::Path::new(path)
+                        .file_stem()
+                        .map(|s| format!("{}.csv", s.to_string_lossy()))
+                        .unwrap_or_else(|| "export.csv".to_string());
+                    if let Some(save_path) = rfd::FileDialog::new()
+                        .set_file_name(&default_name)
+                        .add_filter("CSV", &["csv"])
+                        .save_file()
+                    {
+                        v.start_export(&save_path.display().to_string());
+                    }
+                }
+                ui.separator();
+                ui.label(egui::RichText::new(path).family(egui::FontFamily::Monospace));
+                ui.separator();
+                ui.label(format!("{} {} RECORDS", v.records.len(), v.source_label()));
+                ui.separator();
+                let dur = v.duration_secs();
+                let mins = (dur / 60.0) as u32;
+                let secs = dur % 60.0;
+                ui.label(format!("DURATION: {:02}:{:04.1}", mins, secs));
+            }
+
+            if let Some(ref err) = v.error {
+                ui.separator();
+                ui.colored_label(tc.red_accent, err.as_str());
+            }
+
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let border_color = if v.link_axes { tc.accent } else { tc.label_color };
+                let checkbox_stroke = egui::Stroke::new(1.5, border_color);
+                ui.scope(|ui| {
+                    let visuals = &mut ui.style_mut().visuals;
+                    visuals.widgets.inactive.bg_stroke = checkbox_stroke;
+                    visuals.widgets.hovered.bg_stroke = checkbox_stroke;
+                    visuals.widgets.active.bg_stroke = checkbox_stroke;
+                    ui.checkbox(&mut v.link_axes, "SYNC AXES");
+                });
+            });
+        });
+    });
+
+    if v.records.is_empty() {
+        egui::CentralPanel::default().show(root_ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.3);
+                ui.label(egui::RichText::new(kind.empty_hint())
+                    .size(18.0)
+                    .color(tc.label_color));
+                ui.add_space(20.0);
+                let hint_color = tc.label_color.gamma_multiply(0.6);
+                for hint in [
+                    "SCROLL TO ZOOM CHARTS, DRAG TO PAN",
+                    "DOUBLE CLICK TO RESET ZOOM",
+                    "CLICK A FLIGHT STATE SEGMENT TO ZOOM ALL CHARTS TO IT",
+                    "CLICK SAME SEGMENT TO RESET ZOOM",
+                    "CLICK ANY CHART TO SELECT A RECORD",
+                    "\"SYNC AXES\" CHECKBOX LINKS PAN/ZOOM ACROSS CHARTS",
+                ] {
+                    ui.label(egui::RichText::new(hint).size(13.0).color(hint_color));
+                }
+            });
+        });
+        return;
+    }
+
+    // === SD BOTTOM: Timeline scrubber + Replay controls ===
+    egui::Panel::bottom(kind.panel_id("scrubber"))
+        .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
+        .show(root_ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("RECORD");
+            let max = v.records.len().saturating_sub(1);
+            ui.add(egui::Slider::new(&mut v.selected_index, 0..=max)
+                .show_value(true));
+
+            if let Some(r) = v.selected_record() {
+                if v.has_utc() {
+                    if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
+                        ui.separator();
+                        ui.label(egui::RichText::new(dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string())
+                            .family(egui::FontFamily::Monospace));
+                    }
+                }
+                ui.separator();
+                ui.label(format!("TICK: {}", r.tick));
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                use crate::sd_viewer::state::REPLAY_SPEEDS;
+
+                let speed = REPLAY_SPEEDS[v.replay_speed_index];
+                let speed_text = if speed == speed.floor() {
+                    format!("x{:.0}", speed)
+                } else {
+                    format!("x{:.1}", speed)
+                };
+                ui.label(egui::RichText::new(speed_text)
+                    .family(egui::FontFamily::Name("Bold".into()))
+                    .size(12.0)
+                    .color(tc.accent));
+
+                let speed_idx = v.replay_speed_index;
+                if ui.add_enabled(speed_idx < REPLAY_SPEEDS.len() - 1, egui::Button::new(
+                    egui::RichText::new("\u{23E9}").size(13.0),
+                )).on_hover_text("FASTER").clicked() {
+                    v.replay_speed_index = (speed_idx + 1).min(REPLAY_SPEEDS.len() - 1);
+                }
+
+                if ui.button(egui::RichText::new("\u{23F9}").size(13.0))
+                    .on_hover_text("STOP")
+                    .clicked()
+                {
+                    v.replay_playing = false;
+                    v.replay_last_wall = None;
+                    v.selected_index = 0;
+                }
+
+                let play_label = if v.replay_playing { "\u{23F8}" } else { "\u{25B6}" };
+                if ui.button(egui::RichText::new(play_label).size(13.0))
+                    .on_hover_text(if v.replay_playing { "PAUSE" } else { "PLAY" })
+                    .clicked()
+                {
+                    v.replay_playing = !v.replay_playing;
+                    if v.replay_playing {
+                        v.replay_last_wall = None;
+                        if v.selected_index >= v.records.len().saturating_sub(1) {
+                            v.selected_index = 0;
+                        }
+                    }
+                }
+
+                if ui.add_enabled(speed_idx > 0, egui::Button::new(
+                    egui::RichText::new("\u{23EA}").size(13.0),
+                )).on_hover_text("SLOWER").clicked() {
+                    v.replay_speed_index = speed_idx.saturating_sub(1);
+                }
+            });
+        });
+    });
+
+    let has_full = v.has_full_data();
+
+    // === MAP (right panel) ===
+    if has_full {
+    egui::Panel::right(kind.panel_id("map_panel"))
+        .default_size(300.0)
+        .min_size(250.0)
+        .resizable(true)
+        .show(root_ui, |ui| {
+            theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
+                let current_gps = v.selected_record()
+                    .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
+                    .map(|r| (r.latitude, r.longitude));
+                if let Some(ref mut map_state) = v.map_state {
+                    if v.lock_gps {
+                        map_state.memory.follow_my_position();
+                    }
+                    ui.horizontal(|ui| {
+                        let border_color = if v.lock_gps { tc.accent } else { tc.label_color };
+                        let checkbox_stroke = egui::Stroke::new(1.5, border_color);
+                        ui.scope(|ui| {
+                            let visuals = &mut ui.style_mut().visuals;
+                            visuals.widgets.inactive.bg_stroke = checkbox_stroke;
+                            visuals.widgets.hovered.bg_stroke = checkbox_stroke;
+                            visuals.widgets.active.bg_stroke = checkbox_stroke;
+                            ui.checkbox(&mut v.lock_gps, "LOCK ON GPS");
+                        });
+                    });
+                    ui.add_space(4.0);
+                    let partial_trail: std::collections::VecDeque<(f64, f64)> = v.records[..=v.selected_index]
+                        .iter()
+                        .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
+                        .map(|r| (r.latitude, r.longitude))
+                        .collect();
+                    let map_rect = ui::map::gps_map(
+                        ui,
+                        &partial_trail,
+                        current_gps,
+                        None,
+                        map_state,
+                    );
+
+                    if let Some(r) = v.selected_record() {
+                        let overlay_width = 195.0;
+                        let overlay_height = 100.0;
+                        let overlay_pos = egui::pos2(
+                            map_rect.right() - overlay_width - 4.0,
+                            map_rect.bottom() - overlay_height - 4.0,
+                        );
+                        let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
+
+                        let painter = ui.painter();
+                        let overlay_bg = if dm {
+                            egui::Color32::from_black_alpha(220)
+                        } else {
+                            egui::Color32::from_white_alpha(220)
+                        };
+                        painter.rect_filled(overlay_rect, 2.0, overlay_bg);
+
+                        let s = 14.0;
+                        let mut y = overlay_rect.top() + 5.0;
+                        let x_label = overlay_rect.left() + 8.0;
+                        let x_value = overlay_rect.left() + 44.0;
+                        let line_h = 18.0;
+
+                        let font = egui::FontId::monospace(s);
+                        let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
+
+                        let rows: &[(&str, String, egui::Color32)] = &[
+                            ("LAT", format!("{:.6}\u{00b0}", r.latitude), tc.value_color),
+                            ("LON", format!("{:.6}\u{00b0}", r.longitude), tc.value_color),
+                            ("ALT", format!("{:.1} m", r.gps_altitude), tc.value_color),
+                            ("SAT", format!("{}", r.satellites), if r.satellites >= 4 { tc.green } else { tc.red_accent }),
+                        ];
+                        for (label, value, color) in rows {
+                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
+                            painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
+                            y += line_h;
+                        }
+
+                        let link_rect = egui::Rect::from_min_size(
+                            egui::pos2(x_label, y),
+                            egui::vec2(overlay_width - 16.0, line_h),
+                        );
+                        let link_resp = ui.interact(link_rect, ui.id().with("sd_gmaps_link"), egui::Sense::click());
+                        let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
+                        painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
+                        if link_resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if link_resp.clicked() {
+                            let url = format!("https://www.google.com/maps?q={},{}", r.latitude, r.longitude);
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                        }
+                    }
+                }
+            });
+        });
+    } // has_full (map panel)
+
+    // === CENTER: Data grid (sticky) + Charts (scrollable) ===
+    egui::CentralPanel::default().show(root_ui, |ui| {
+        let r = v.selected_record().cloned();
+
+        if has_full {
+            ui.columns(4, |cols| {
+                theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
+                        theme::data_row(ui, "STATE", &format!("{}", r.state), dm);
+                        theme::data_row(ui, "FLAGS", &format!("{}", r.flags), dm);
+                        theme::data_row(ui, "LAST COMMAND", &format!("{}", r.last_command), dm);
+                        let drogue_color = if r.relay.drogue_fired { tc.red_accent } else { tc.green };
+                        theme::data_row_colored(ui, "DROGUE", if r.relay.drogue_fired { "FIRED" } else { "SAFE" }, drogue_color, dm);
+                        let chute_color = if r.relay.parachute_fired { tc.red_accent } else { tc.green };
+                        theme::data_row_colored(ui, "PARACHUTE", if r.relay.parachute_fired { "FIRED" } else { "SAFE" }, chute_color, dm);
+                    }
+                });
+
+                theme::bordered_section(&mut cols[1], "POSITION", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "GPS ALT (ASL)", &format!("{:.2} m", r.gps_altitude), dm);
+                        let idx = v.selected_index;
+                        let baro_alt = v.baro_altitude.get(idx).copied().unwrap_or(0.0);
+                        let baro_vel = v.baro_velocity.get(idx).copied().unwrap_or(0.0);
+                        theme::data_row(ui, "BARO ALT", &format!("{:.2} m", baro_alt), dm);
+                        theme::data_row(ui, "BARO VEL", &format!("{:.2} m/s", baro_vel), dm);
+                        theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", r.latitude), dm);
+                        theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", r.longitude), dm);
+                        theme::data_row(ui, "SATELLITES", &format!("{}", r.satellites), dm);
+                    }
+                });
+
+                theme::bordered_section(&mut cols[2], "SENSORS", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "PRESSURE", &format!("{:.0} Pa", r.pressure_pa), dm);
+                        theme::data_row(ui, "TEMPERATURE", &format!("{:.2} \u{00b0}C", r.temperature_c), dm);
+                        theme::data_row(ui, "BATTERY", &format!("{:.2} V", r.battery_voltage), dm);
+                    }
+                });
+
+                let has_mag = v.has_mag();
+                theme::bordered_section(&mut cols[3], "MAGNETOMETER", tc.accent, dm, |ui| {
+                    if !has_mag {
+                        ui.label(egui::RichText::new("NOT AVAILABLE").color(tc.label_color.gamma_multiply(0.5)));
+                    } else if let Some(ref r) = r {
+                        theme::data_row(ui, "MAG X", &format!("{:.2} mG", r.mag[0]), dm);
+                        theme::data_row(ui, "MAG Y", &format!("{:.2} mG", r.mag[1]), dm);
+                        theme::data_row(ui, "MAG Z", &format!("{:.2} mG", r.mag[2]), dm);
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+
+            ui.columns(4, |cols| {
+                theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        let fault_list = [
+                            ("BMP280", r.flags & 0x03),
+                            ("BMP581", r.flags & 0x0C),
+                            ("IIM42653", r.flags & 0x30),
+                            ("IIS2MDCTR", r.flags & 0xC0),
+                            ("SD", r.flags & 0x300),
+                        ];
+                        for (name, bits) in fault_list {
+                            let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
+                            theme::data_row_colored(ui, name, status, color, dm);
+                        }
+                    }
+                });
+
+                theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
+                        theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
+                        theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", r.accel[2]), dm);
+                    }
+                });
+
+                theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
+                        theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
+                        theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", r.gyro[2]), dm);
+                    }
+                });
+
+                let has_utc = v.has_utc();
+                theme::bordered_section(&mut cols[3], "TIMESTAMP", tc.accent, dm, |ui| {
+                    if !has_utc {
+                        ui.label(egui::RichText::new("NOT AVAILABLE").color(tc.label_color.gamma_multiply(0.5)));
+                    } else if let Some(ref r) = r {
+                        theme::data_row(ui, "UNIX TIME", &format!("{}", r.unix_time), dm);
+                        theme::data_row(ui, "MILLIS", &format!("{}", r.milliseconds), dm);
+                        if let Some(dt) = chrono::DateTime::from_timestamp(r.unix_time as i64, r.milliseconds as u32 * 1_000_000) {
+                            theme::data_row(ui, "UTC", &dt.format("%H:%M:%S%.3f").to_string(), dm);
+                        }
+                    }
+                });
+            });
+        } else {
+            ui.columns(3, |cols| {
+                theme::bordered_section(&mut cols[0], "STATUS", tc.red_accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "TICK", &format!("{}", r.tick), dm);
+                        theme::data_row(ui, "STATE", &format!("{}", r.state), dm);
+                    }
+                });
+
+                theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
+                        theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
+                        theme::data_row(ui, "ACCEL Z", &format!("{:.2} m/s\u{00b2}", r.accel[2]), dm);
+                    }
+                });
+
+                theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
+                        theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
+                        theme::data_row(ui, "GYRO Z", &format!("{:.2} \u{00b0}/s", r.gyro[2]), dm);
+                    }
+                });
+            });
+        }
+
+            ui.add_space(4.0);
+
+        egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
+            let selected_t = v.timestamps.get(v.selected_index).copied();
+            let zoom_x = v.zoom_x.take();
+            let reset = std::mem::take(&mut v.reset_zoom);
+            let link_axes = v.link_axes;
+
+            use crate::sd_viewer::charts;
+            let mut clicked_ts: Option<f64> = None;
+            let mut new_zoom: Option<(f64, f64)> = None;
+
+            let na_label = |ui: &mut egui::Ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(60.0);
+                    ui.label(egui::RichText::new("NOT AVAILABLE")
+                        .size(16.0)
+                        .color(tc.label_color.gamma_multiply(0.5)));
+                    ui.add_space(60.0);
+                });
+            };
+
+            theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
+                if let Some(click) = charts::state_timeline_chart(ui, &v.state_segments, &v.timeline_markers, selected_t, zoom_x, link_axes, reset) {
+                    match click {
+                        charts::TimelineClick::Segment { start, end } => {
+                            if v.zoomed_segment == Some((start, end)) {
+                                v.zoomed_segment = None;
+                                v.reset_zoom = true;
+                            } else {
+                                let padding = (end - start) * 0.05;
+                                new_zoom = Some((start - padding, end + padding));
+                                v.zoomed_segment = Some((start, end));
+                            }
+                        }
+                        charts::TimelineClick::Point(t) => {
+                            clicked_ts = Some(t);
+                        }
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            {
+                let gap_count = v.gaps.len();
+                let total_dropped: u64 = v.gaps.iter().map(|g| g.dropped).sum();
+                let label = if gap_count > 0 {
+                    format!("SAMPLE GAPS — {} GAPS, ~{} DROPPED", gap_count, total_dropped)
+                } else {
+                    "SAMPLE GAPS — NONE".to_string()
+                };
+                theme::bordered_section(ui, &label, tc.accent, dm, |ui| {
+                    let duration = v.duration_secs();
+                    if let Some(t) = charts::gap_timeline_chart(ui, &v.gaps, duration, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
+                if has_full {
+                    if let Some(t) = charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "BARO VELOCITY", tc.accent, dm, |ui| {
+                if has_full {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &v.timestamps, &v.baro_velocity, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
+                if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &v.timestamps, &v.accel_x, &v.accel_y, &v.accel_z, selected_t, zoom_x, link_axes, reset) {
+                    clicked_ts = Some(t);
+                }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
+                if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &v.timestamps, &v.gyro_x, &v.gyro_y, &v.gyro_z, selected_t, zoom_x, link_axes, reset) {
+                    clicked_ts = Some(t);
+                }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
+                if has_full {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &v.timestamps, &v.pressure, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
+                if has_full {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &v.timestamps, &v.temperature, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
+                if has_full {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &v.timestamps, &v.battery, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+
+            if let Some(z) = new_zoom {
+                v.zoom_x = Some(z);
+            }
+
+            if let Some(t) = clicked_ts {
+                v.selected_index = charts::timestamp_to_index(&v.timestamps, t);
+            }
+
+            if v.has_raw() {
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "RAW RECORD", tc.accent, dm, |ui| {
+                    if let Some(ref r) = r {
+                        let fields = if has_full { SD_RECORD_FIELDS } else { FLASH_RECORD_FIELDS };
+                        ui::hex_viewer::hex_viewer(ui, &r.raw, fields, dm);
+                    } else {
+                        ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
+                    }
+                });
+            }
+        }); // ScrollArea
+    });
+
+    if let Some(ref label) = v.bg_label.clone() {
+        let frac = v.progress_fraction();
+        let pct = (frac * 100.0) as u32;
+        let current = v.progress_current();
+        let total = v.bg_total;
+        let is_export = label == "EXPORTING";
+        let eta_text = match v.progress_eta_secs() {
+            Some(secs) if secs >= 60.0 => format!("ETA {}m{:02}s", secs as u64 / 60, secs as u64 % 60),
+            Some(secs) => format!("ETA {:.0}s", secs),
+            None => String::new(),
+        };
+        egui::Window::new(label.as_str())
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(root_ui.ctx(), |ui| {
+                ui.set_min_width(300.0);
+                ui.label(format!("{} / {} ({}%)", current, total, pct));
+                if !eta_text.is_empty() {
+                    ui.label(&eta_text);
+                }
+                ui.add(egui::ProgressBar::new(frac).desired_height(8.0));
+                if is_export {
+                    ui.add_space(4.0);
+                    if ui.button("CANCEL").clicked() {
+                        v.cancel_export();
+                    }
+                }
+            });
+    }
+
+    if v.status_message.is_some() {
+        let mut open = true;
+        let msg = v.status_message.clone().unwrap();
+        let export_dir = v.last_export_dir.clone();
+        egui::Window::new("DONE")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(root_ui.ctx(), |ui| {
+                ui.label(egui::RichText::new(&msg).size(14.0));
+                if let Some(ref dir) = export_dir {
+                    ui.add_space(4.0);
+                    if ui.button("OPEN DIRECTORY").clicked() {
+                        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                    }
+                }
+            });
+        if !open {
+            v.status_message = None;
+            v.last_export_dir = None;
         }
     }
 }

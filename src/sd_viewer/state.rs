@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::sd_log::csv::{parse_csv_file_with_progress, CsvLayout, CsvLog};
 use crate::sd_log::parser::{parse_sd_file_with_progress, parse_flash_file_with_progress};
 use crate::sd_log::record::{SdRecord, TICK_RATE_HZ};
 
@@ -12,6 +13,7 @@ use crate::sd_log::record::{SdRecord, TICK_RATE_HZ};
 pub enum DataSource {
     SdLog,
     FlashLog,
+    Csv,
 }
 use crate::sd_viewer::charts;
 use crate::telemetry::packet::{Command, FlightState};
@@ -19,6 +21,7 @@ use crate::ui::map::MapState;
 
 pub enum BgTaskResult {
     Loaded(Vec<SdRecord>, String, DataSource),
+    LoadedCsv(CsvLog, String),
     Exported(String),
     Cancelled,
     Error(String),
@@ -96,6 +99,7 @@ pub const REPLAY_SPEEDS: &[f64] = &[1.0, 1.5, 2.0, 4.0];
 pub struct SdViewerState {
     pub records: Vec<SdRecord>,
     pub data_source: DataSource,
+    pub csv_layout: CsvLayout,
     pub file_path: Option<String>,
     pub selected_index: usize,
     pub error: Option<String>,
@@ -117,18 +121,6 @@ pub struct SdViewerState {
     pub battery: Vec<f64>,
     pub baro_altitude: Vec<f64>,
     pub baro_velocity: Vec<f64>,
-    pub relay_drogue: Vec<f64>,
-    pub relay_parachute: Vec<f64>,
-    pub pos_x: Vec<f64>,
-    pub pos_y: Vec<f64>,
-    pub pos_z: Vec<f64>,
-    pub vel_x: Vec<f64>,
-    pub vel_y: Vec<f64>,
-    pub vel_z: Vec<f64>,
-    pub quat_w: Vec<f64>,
-    pub quat_x: Vec<f64>,
-    pub quat_y: Vec<f64>,
-    pub quat_z: Vec<f64>,
     pub gaps: Vec<GapInfo>,
     pub state_segments: Vec<StateSegment>,
     pub timeline_markers: Vec<TimelineMarker>,
@@ -152,6 +144,7 @@ impl SdViewerState {
         Self {
             records: Vec::new(),
             data_source: DataSource::SdLog,
+            csv_layout: CsvLayout::default(),
             file_path: None,
             selected_index: 0,
             error: None,
@@ -173,18 +166,6 @@ impl SdViewerState {
             battery: Vec::new(),
             baro_altitude: Vec::new(),
             baro_velocity: Vec::new(),
-            relay_drogue: Vec::new(),
-            relay_parachute: Vec::new(),
-            pos_x: Vec::new(),
-            pos_y: Vec::new(),
-            pos_z: Vec::new(),
-            vel_x: Vec::new(),
-            vel_y: Vec::new(),
-            vel_z: Vec::new(),
-            quat_w: Vec::new(),
-            quat_x: Vec::new(),
-            quat_y: Vec::new(),
-            quat_z: Vec::new(),
             gaps: Vec::new(),
             state_segments: Vec::new(),
             timeline_markers: Vec::new(),
@@ -247,23 +228,66 @@ impl SdViewerState {
         self.bg_receiver = Some(rx);
     }
 
+    pub fn load_csv_file(&mut self, path: &str) {
+        self.error = None;
+        self.records.clear();
+        self.clear_series();
+        self.bg_label = Some("LOADING".to_string());
+        self.bg_start_time = Some(Instant::now());
+
+        self.bg_total = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.bg_progress = Some(Arc::clone(&progress));
+
+        let (tx, rx) = mpsc::channel();
+        let path_owned = path.to_string();
+        std::thread::spawn(move || {
+            let data = match std::fs::read(&path_owned) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = tx.send(BgTaskResult::Error(format!("Failed to read file: {}", e)));
+                    return;
+                }
+            };
+            match parse_csv_file_with_progress(&data, Some(&progress)) {
+                Ok(log) => { let _ = tx.send(BgTaskResult::LoadedCsv(log, path_owned)); }
+                Err(e) => { let _ = tx.send(BgTaskResult::Error(e)); }
+            }
+        });
+        self.bg_receiver = Some(rx);
+    }
+
     fn finish_load(&mut self, records: Vec<SdRecord>, path: String, source: DataSource) {
         self.data_source = source;
         self.extract_series(&records);
         self.build_state_segments(&records);
         self.detect_gaps(&records);
-        if source == DataSource::SdLog {
+        if self.has_full_data() {
             self.detect_relay_events(&records);
             self.detect_command_events(&records);
         }
         self.records = records;
         self.selected_index = 0;
         self.file_path = Some(path);
-        let label = match source {
+        self.status_message = Some(format!("LOADED {} {} RECORDS", self.records.len(), self.source_label()));
+    }
+
+    fn finish_load_csv(&mut self, log: CsvLog, path: String) {
+        self.csv_layout = log.layout;
+        self.finish_load(log.records, path, DataSource::Csv);
+        // Prefer the baro values stored in the CSV (firmware or previous export) over recomputing.
+        if log.layout.baro {
+            self.baro_altitude = log.baro_altitude;
+            self.baro_velocity = log.baro_velocity;
+        }
+    }
+
+    pub fn source_label(&self) -> &'static str {
+        match self.data_source {
             DataSource::SdLog => "SD",
             DataSource::FlashLog => "FLASH",
-        };
-        self.status_message = Some(format!("LOADED {} {} RECORDS", self.records.len(), label));
+            DataSource::Csv => "CSV",
+        }
     }
 
     pub fn start_export(&mut self, path: &str) {
@@ -278,10 +302,12 @@ impl SdViewerState {
 
         let (tx, rx) = mpsc::channel();
         let records = self.records.clone();
+        let baro_altitude = self.baro_altitude.clone();
+        let baro_velocity = self.baro_velocity.clone();
         let source = self.data_source;
         let path_owned = path.to_string();
         std::thread::spawn(move || {
-            let result = export_csv_to_file(&path_owned, &records, source, Some(&progress), Some(&cancel));
+            let result = export_csv_to_file(&path_owned, &records, &baro_altitude, &baro_velocity, source, Some(&progress), Some(&cancel));
             match result {
                 Ok(true) => { let _ = tx.send(BgTaskResult::Exported(path_owned)); }
                 Ok(false) => { let _ = tx.send(BgTaskResult::Cancelled); }
@@ -312,6 +338,7 @@ impl SdViewerState {
                 self.bg_cancel = None;
                 match result {
                     BgTaskResult::Loaded(records, path, source) => self.finish_load(records, path, source),
+                    BgTaskResult::LoadedCsv(log, path) => self.finish_load_csv(log, path),
                     BgTaskResult::Exported(path) => {
                         let p = std::path::Path::new(&path);
                         let name = p.file_name()
@@ -384,19 +411,13 @@ impl SdViewerState {
         self.battery.reserve(count);
         self.baro_altitude.reserve(count);
         self.baro_velocity.reserve(count);
-        self.relay_drogue.reserve(count);
-        self.relay_parachute.reserve(count);
-        self.pos_x.reserve(count);
-        self.pos_y.reserve(count);
-        self.pos_z.reserve(count);
-        self.vel_x.reserve(count);
-        self.vel_y.reserve(count);
-        self.vel_z.reserve(count);
-        self.quat_w.reserve(count);
-        self.quat_x.reserve(count);
-        self.quat_y.reserve(count);
-        self.quat_z.reserve(count);
 
+        let ref_pressure = Self::compute_reference_pressure(records);
+
+        const R: f64 = 287.0;
+        const G: f64 = 9.80665;
+        const ALPHA: f64 = 0.1;
+        let mut filtered_alt: Option<f64> = None;
         let mut prev_alt: Option<f64> = None;
         let mut prev_tick: Option<u32> = None;
 
@@ -412,33 +433,54 @@ impl SdViewerState {
             self.pressure.push(r.pressure_pa);
             self.temperature.push(r.temperature_c);
             self.battery.push(r.battery_voltage);
-            self.relay_drogue.push(r.relay.drogue_fired as u8 as f64);
-            self.relay_parachute.push(r.relay.parachute_fired as u8 as f64);
-            self.pos_x.push(r.pos[0]);
-            self.pos_y.push(r.pos[1]);
-            self.pos_z.push(r.pos[2]);
-            self.vel_x.push(r.vel[0]);
-            self.vel_y.push(r.vel[1]);
-            self.vel_z.push(r.vel[2]);
-            self.quat_w.push(r.quat[0]);
-            self.quat_x.push(r.quat[1]);
-            self.quat_y.push(r.quat[2]);
-            self.quat_z.push(r.quat[3]);
             if r.latitude != 0.0 || r.longitude != 0.0 {
                 self.gps_trail.push_back((r.latitude, r.longitude));
             }
 
-            self.baro_altitude.push(r.baro_altitude);
-            let vel = match (prev_alt, prev_tick) {
-                (Some(pa), Some(pt)) => {
-                    let dt = (r.tick.wrapping_sub(pt)) as f64 / 1000.0;
-                    if dt > 0.0 { (r.baro_altitude - pa) / dt } else { 0.0 }
-                }
-                _ => 0.0,
-            };
-            prev_alt = Some(r.baro_altitude);
-            prev_tick = Some(r.tick);
-            self.baro_velocity.push(vel);
+            if r.pressure_pa > 0.0 && ref_pressure > 0.0 {
+                let temp_k = r.temperature_c + 273.15;
+                let raw_alt = (R * temp_k / G) * (ref_pressure / r.pressure_pa).ln();
+                let filt = match filtered_alt {
+                    Some(prev) => prev + ALPHA * (raw_alt - prev),
+                    None => raw_alt,
+                };
+                filtered_alt = Some(filt);
+
+                let vel = match (prev_alt, prev_tick) {
+                    (Some(pa), Some(pt)) => {
+                        let dt = (r.tick.wrapping_sub(pt)) as f64 / 1000.0;
+                        if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
+                    }
+                    _ => 0.0,
+                };
+                prev_alt = Some(filt);
+                prev_tick = Some(r.tick);
+
+                self.baro_altitude.push(filt);
+                self.baro_velocity.push(vel);
+            } else {
+                self.baro_altitude.push(0.0);
+                self.baro_velocity.push(0.0);
+            }
+        }
+    }
+
+    fn compute_reference_pressure(records: &[SdRecord]) -> f64 {
+        let prelaunch: Vec<f64> = records.iter()
+            .filter(|r| r.state == FlightState::Prelaunch || r.state == FlightState::Calibration)
+            .take(2000)
+            .map(|r| r.pressure_pa)
+            .filter(|&p| p > 0.0)
+            .collect();
+        if prelaunch.is_empty() {
+            records.iter()
+                .take(2000)
+                .map(|r| r.pressure_pa)
+                .filter(|&p| p > 0.0)
+                .sum::<f64>()
+                / records.iter().take(2000).filter(|r| r.pressure_pa > 0.0).count().max(1) as f64
+        } else {
+            prelaunch.iter().sum::<f64>() / prelaunch.len() as f64
         }
     }
 
@@ -597,7 +639,31 @@ impl SdViewerState {
     }
 
     pub fn has_full_data(&self) -> bool {
-        self.data_source == DataSource::SdLog
+        match self.data_source {
+            DataSource::SdLog => true,
+            DataSource::FlashLog => false,
+            DataSource::Csv => self.csv_layout.full,
+        }
+    }
+
+    pub fn has_mag(&self) -> bool {
+        match self.data_source {
+            DataSource::SdLog => true,
+            DataSource::FlashLog => false,
+            DataSource::Csv => self.csv_layout.mag,
+        }
+    }
+
+    pub fn has_utc(&self) -> bool {
+        match self.data_source {
+            DataSource::SdLog => true,
+            DataSource::FlashLog => false,
+            DataSource::Csv => self.csv_layout.time,
+        }
+    }
+
+    pub fn has_raw(&self) -> bool {
+        self.data_source != DataSource::Csv
     }
 
     pub fn close_file(&mut self) {
@@ -625,18 +691,6 @@ impl SdViewerState {
         self.battery.clear();
         self.baro_altitude.clear();
         self.baro_velocity.clear();
-        self.relay_drogue.clear();
-        self.relay_parachute.clear();
-        self.pos_x.clear();
-        self.pos_y.clear();
-        self.pos_z.clear();
-        self.vel_x.clear();
-        self.vel_y.clear();
-        self.vel_z.clear();
-        self.quat_w.clear();
-        self.quat_x.clear();
-        self.quat_y.clear();
-        self.quat_z.clear();
         self.gaps.clear();
         self.gps_trail.clear();
         self.selected_index = 0;
@@ -644,14 +698,14 @@ impl SdViewerState {
 
 }
 
-fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, progress: Option<&Arc<AtomicUsize>>, cancel: Option<&Arc<AtomicBool>>) -> Result<bool, String> {
+fn export_csv_to_file(path: &str, records: &[SdRecord], baro_altitude: &[f64], baro_velocity: &[f64], source: DataSource, progress: Option<&Arc<AtomicUsize>>, cancel: Option<&Arc<AtomicBool>>) -> Result<bool, String> {
     let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     match source {
         DataSource::SdLog => {
-            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,baro_altitude,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,quat_w,quat_x,quat_y,quat_z,p_diag_0,p_diag_1,p_diag_2,p_diag_3,p_diag_4,p_diag_5,p_diag_6,p_diag_7,p_diag_8,flags,battery_v,state,relay,last_command")
+            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,baro_altitude,baro_velocity,flags,battery_voltage,state,relay,last_command")
                 .map_err(|e| format!("Write error: {}", e))?;
         }
-        DataSource::FlashLog => {
+        DataSource::FlashLog | DataSource::Csv => {
             writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,state")
                 .map_err(|e| format!("Write error: {}", e))?;
         }
@@ -667,7 +721,7 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, prog
                 let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
                 writeln!(
                     file,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     r.tick,
                     r.accel[0], r.accel[1], r.accel[2],
                     r.gyro[0], r.gyro[1], r.gyro[2],
@@ -680,13 +734,8 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, prog
                     r.unix_time,
                     r.milliseconds,
                     r.satellites,
-                    r.baro_altitude,
-                    r.pos[0], r.pos[1], r.pos[2],
-                    r.vel[0], r.vel[1], r.vel[2],
-                    r.quat[0], r.quat[1], r.quat[2], r.quat[3],
-                    r.p_diag[0], r.p_diag[1], r.p_diag[2],
-                    r.p_diag[3], r.p_diag[4], r.p_diag[5],
-                    r.p_diag[6], r.p_diag[7], r.p_diag[8],
+                    baro_altitude.get(i).copied().unwrap_or(0.0),
+                    baro_velocity.get(i).copied().unwrap_or(0.0),
                     r.flags,
                     r.battery_voltage,
                     r.state as u8,
@@ -694,7 +743,7 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], source: DataSource, prog
                     r.last_command as u8,
                 ).map_err(|e| format!("Write error: {}", e))?;
             }
-            DataSource::FlashLog => {
+            DataSource::FlashLog | DataSource::Csv => {
                 writeln!(
                     file,
                     "{},{},{},{},{},{},{},{}",
