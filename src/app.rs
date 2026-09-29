@@ -1274,6 +1274,14 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 }
             });
             ui.add_space(4.0);
+            theme::bordered_section(ui, "MAGNETOMETER", tc.accent, dm, |ui| {
+                if v.has_mag() {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_mag", "mG", &v.timestamps, &v.mag_x, &v.mag_y, &v.mag_z, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
             theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
                 if has_full {
                     if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &v.timestamps, &v.pressure, selected_t, zoom_x, link_axes, reset) {

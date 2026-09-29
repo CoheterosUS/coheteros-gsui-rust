@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 
 use crate::state::AppState;
 
@@ -41,6 +41,7 @@ pub fn altitude_chart(ui: &mut egui::Ui, state: &AppState) {
     let baro: PlotPoints = state.baro_altitude.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let gps: PlotPoints = state.gps_altitude.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     telemetry_plot("altitude_plot")
+        .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(multi_series_formatter(vec![
             ("Barometric", &state.baro_altitude, "m"),
             ("GPS", &state.gps_altitude, "m"),
@@ -56,6 +57,7 @@ pub fn acceleration_chart(ui: &mut egui::Ui, state: &AppState) {
     let y: PlotPoints = state.accel_y.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let z: PlotPoints = state.accel_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     telemetry_plot("accel_plot")
+        .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(multi_series_formatter(vec![
             ("Accel X", &state.accel_x, "m/s\u{00b2}"),
             ("Accel Y", &state.accel_y, "m/s\u{00b2}"),
@@ -73,6 +75,7 @@ pub fn gyroscope_chart(ui: &mut egui::Ui, state: &AppState) {
     let y: PlotPoints = state.gyro_y.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let z: PlotPoints = state.gyro_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     telemetry_plot("gyro_plot")
+        .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(multi_series_formatter(vec![
             ("Gyro X", &state.gyro_x, "\u{00b0}/s"),
             ("Gyro Y", &state.gyro_y, "\u{00b0}/s"),

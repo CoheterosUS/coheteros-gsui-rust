@@ -115,6 +115,9 @@ pub struct SdViewerState {
     pub gyro_x: Vec<f64>,
     pub gyro_y: Vec<f64>,
     pub gyro_z: Vec<f64>,
+    pub mag_x: Vec<f64>,
+    pub mag_y: Vec<f64>,
+    pub mag_z: Vec<f64>,
     pub gps_altitude: Vec<f64>,
     pub pressure: Vec<f64>,
     pub temperature: Vec<f64>,
@@ -160,6 +163,9 @@ impl SdViewerState {
             gyro_x: Vec::new(),
             gyro_y: Vec::new(),
             gyro_z: Vec::new(),
+            mag_x: Vec::new(),
+            mag_y: Vec::new(),
+            mag_z: Vec::new(),
             gps_altitude: Vec::new(),
             pressure: Vec::new(),
             temperature: Vec::new(),
@@ -405,6 +411,9 @@ impl SdViewerState {
         self.gyro_x.reserve(count);
         self.gyro_y.reserve(count);
         self.gyro_z.reserve(count);
+        self.mag_x.reserve(count);
+        self.mag_y.reserve(count);
+        self.mag_z.reserve(count);
         self.gps_altitude.reserve(count);
         self.pressure.reserve(count);
         self.temperature.reserve(count);
@@ -429,6 +438,9 @@ impl SdViewerState {
             self.gyro_x.push(r.gyro[0]);
             self.gyro_y.push(r.gyro[1]);
             self.gyro_z.push(r.gyro[2]);
+            self.mag_x.push(r.mag[0]);
+            self.mag_y.push(r.mag[1]);
+            self.mag_z.push(r.mag[2]);
             self.gps_altitude.push(r.gps_altitude);
             self.pressure.push(r.pressure_pa);
             self.temperature.push(r.temperature_c);
@@ -685,6 +697,9 @@ impl SdViewerState {
         self.gyro_x.clear();
         self.gyro_y.clear();
         self.gyro_z.clear();
+        self.mag_x.clear();
+        self.mag_y.clear();
+        self.mag_z.clear();
         self.gps_altitude.clear();
         self.pressure.clear();
         self.temperature.clear();

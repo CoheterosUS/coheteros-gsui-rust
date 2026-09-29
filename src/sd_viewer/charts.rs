@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use egui::Align2;
-use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, VLine};
+use egui_plot::{Bar, BarChart, Corner, Legend, Line, Plot, PlotPoints, VLine};
 use crate::sd_viewer::state::{GapInfo, StateSegment, TimelineMarker};
 
 const MAX_CHART_POINTS: usize = 10_000;
@@ -74,10 +74,15 @@ pub fn timestamp_to_index(timestamps: &[f64], t: f64) -> usize {
     }
 }
 
-fn cursor_line(selected_t: Option<f64>) -> Option<VLine> {
+fn cursor_line(ctx: &egui::Context, selected_t: Option<f64>) -> Option<VLine> {
+    let color = if ctx.global_style().visuals.dark_mode {
+        egui::Color32::from_rgba_premultiplied(200, 200, 200, 120)
+    } else {
+        egui::Color32::BLACK
+    };
     selected_t.map(|t| {
-        VLine::new("cursor", t)
-            .color(egui::Color32::from_rgba_premultiplied(200, 200, 200, 120))
+        VLine::new("", t)
+            .color(color)
             .width(1.0)
             .style(egui_plot::LineStyle::Dashed { length: 4.0 })
     })
@@ -111,7 +116,7 @@ pub fn single_series_chart(
                 plot_ui.set_plot_bounds_x(lo..=hi);
             }
             plot_ui.line(Line::new(name, points));
-            if let Some(vline) = cursor_line(selected_t) {
+            if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
             }
         });
@@ -140,6 +145,7 @@ pub fn triple_series_chart(
     let zv = z_vals;
     let u = unit.to_string();
     let plot_response = sd_plot(id, link_axes, reset)
+        .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(move |hover| {
             let x = hover_x(hover);
             let mut lines = Vec::new();
@@ -157,7 +163,7 @@ pub fn triple_series_chart(
             plot_ui.line(Line::new("X", px));
             plot_ui.line(Line::new("Y", py));
             plot_ui.line(Line::new("Z", pz));
-            if let Some(vline) = cursor_line(selected_t) {
+            if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
             }
         });
@@ -266,7 +272,7 @@ pub fn state_timeline_chart(
                 );
                 *offset += 1.0;
             }
-            if let Some(vline) = cursor_line(selected_t) {
+            if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
             }
         });
@@ -298,6 +304,7 @@ pub fn altitude_chart(
     let gv = gps_alt;
     let bv = baro_alt;
     let plot_response = sd_plot("sd_altitude", link_axes, reset)
+        .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(move |hover| {
             let x = hover_x(hover);
             let mut lines = Vec::new();
@@ -315,7 +322,7 @@ pub fn altitude_chart(
             }
             plot_ui.line(Line::new("GPS", pts_gps));
             plot_ui.line(Line::new("Baro", pts_baro));
-            if let Some(vline) = cursor_line(selected_t) {
+            if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
             }
         });
@@ -402,7 +409,7 @@ pub fn gap_timeline_chart(
                     .anchor(Align2::CENTER_CENTER),
                 );
             }
-            if let Some(vline) = cursor_line(selected_t) {
+            if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
             }
         });
