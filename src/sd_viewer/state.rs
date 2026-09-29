@@ -95,6 +95,7 @@ impl FlightStateExt for FlightState {
 }
 
 pub const REPLAY_SPEEDS: &[f64] = &[1.0, 1.5, 2.0, 4.0];
+pub const DEFAULT_CHART_POINTS: usize = 10_000;
 
 pub struct SdViewerState {
     pub records: Vec<SdRecord>,
@@ -131,6 +132,7 @@ pub struct SdViewerState {
     pub map_state: Option<MapState>,
     pub replay_playing: bool,
     pub replay_speed_index: usize,
+    pub chart_points: usize,
     pub replay_last_wall: Option<f64>,
     pub bg_receiver: Option<mpsc::Receiver<BgTaskResult>>,
     pub bg_label: Option<String>,
@@ -179,6 +181,7 @@ impl SdViewerState {
             map_state: None,
             replay_playing: false,
             replay_speed_index: 0,
+            chart_points: DEFAULT_CHART_POINTS,
             replay_last_wall: None,
             bg_receiver: None,
             bg_label: None,

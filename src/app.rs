@@ -905,6 +905,14 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 }
                 ui.separator();
                 ui.label(format!("TICK: {}", r.tick));
+                ui.separator();
+                let max_plot_points = v.records.len();
+                let min_plot_points = max_plot_points.min(1_000);
+                v.chart_points = v.chart_points.clamp(min_plot_points, max_plot_points);
+                ui.label("PLOT POINTS");
+                ui.add(egui::Slider::new(&mut v.chart_points, min_plot_points..=max_plot_points)
+                    .show_value(true))
+                    .on_hover_text("Maximum samples drawn per chart");
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1248,7 +1256,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
             theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
                 if has_full {
-                    if let Some(t) = charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
@@ -1256,27 +1264,27 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
             theme::bordered_section(ui, "BARO VELOCITY", tc.accent, dm, |ui| {
                 if has_full {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &v.timestamps, &v.baro_velocity, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &v.timestamps, &v.baro_velocity, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
             ui.add_space(4.0);
             theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
-                if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &v.timestamps, &v.accel_x, &v.accel_y, &v.accel_z, selected_t, zoom_x, link_axes, reset) {
+                if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &v.timestamps, &v.accel_x, &v.accel_y, &v.accel_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                     clicked_ts = Some(t);
                 }
             });
             ui.add_space(4.0);
             theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
-                if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &v.timestamps, &v.gyro_x, &v.gyro_y, &v.gyro_z, selected_t, zoom_x, link_axes, reset) {
+                if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &v.timestamps, &v.gyro_x, &v.gyro_y, &v.gyro_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                     clicked_ts = Some(t);
                 }
             });
             ui.add_space(4.0);
             theme::bordered_section(ui, "MAGNETOMETER", tc.accent, dm, |ui| {
                 if v.has_mag() {
-                    if let Some(t) = charts::triple_series_chart(ui, "sd_mag", "mG", &v.timestamps, &v.mag_x, &v.mag_y, &v.mag_z, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_mag", "mG", &v.timestamps, &v.mag_x, &v.mag_y, &v.mag_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
@@ -1284,7 +1292,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
             theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
                 if has_full {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &v.timestamps, &v.pressure, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &v.timestamps, &v.pressure, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
@@ -1292,7 +1300,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
             theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
                 if has_full {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &v.timestamps, &v.temperature, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &v.timestamps, &v.temperature, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
@@ -1300,7 +1308,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
             theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
                 if has_full {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &v.timestamps, &v.battery, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &v.timestamps, &v.battery, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }

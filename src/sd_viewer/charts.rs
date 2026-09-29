@@ -3,45 +3,18 @@ use egui::Align2;
 use egui_plot::{Bar, BarChart, Corner, Legend, Line, Plot, PlotPoints, VLine};
 use crate::sd_viewer::state::{GapInfo, StateSegment, TimelineMarker};
 
-const MAX_CHART_POINTS: usize = 10_000;
 const LINK_GROUP: &str = "sd_x_link";
 
-fn decimated_points(timestamps: &[f64], values: &[f64]) -> Vec<[f64; 2]> {
+fn series_points(timestamps: &[f64], values: &[f64], max_points: usize) -> Vec<[f64; 2]> {
     let len = timestamps.len().min(values.len());
     if len == 0 {
         return vec![];
     }
-    if len <= MAX_CHART_POINTS {
-        return (0..len).map(|i| [timestamps[i], values[i]]).collect();
-    }
-
-    // Keep both extrema from each bucket so a short spike is not lost from the
-    // rendered line while plotting large logs remains bounded.
-    let bucket_size = len.div_ceil(MAX_CHART_POINTS);
-    let mut points = Vec::with_capacity(MAX_CHART_POINTS * 2);
-    for start in (0..len).step_by(bucket_size) {
-        let end = (start + bucket_size).min(len);
-        let (mut min_index, mut max_index) = (start, start);
-        for i in start + 1..end {
-            if values[i] < values[min_index] {
-                min_index = i;
-            }
-            if values[i] > values[max_index] {
-                max_index = i;
-            }
-        }
-
-        if min_index <= max_index {
-            points.push([timestamps[min_index], values[min_index]]);
-            if min_index != max_index {
-                points.push([timestamps[max_index], values[max_index]]);
-            }
-        } else {
-            points.push([timestamps[max_index], values[max_index]]);
-            points.push([timestamps[min_index], values[min_index]]);
-        }
-    }
-    points
+    let step = (len / max_points.max(1)).max(1);
+    (0..len)
+        .step_by(step)
+        .map(|i| [timestamps[i], values[i]])
+        .collect()
 }
 
 fn lookup_by_timestamp(timestamps: &[f64], values: &[f64], t: f64) -> Option<f64> {
@@ -121,12 +94,13 @@ pub fn single_series_chart(
     unit: &str,
     timestamps: &[f64],
     values: &[f64],
+    max_points: usize,
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
     reset: bool,
 ) -> Option<f64> {
-    let points: PlotPoints = decimated_points(timestamps, values).into();
+    let points: PlotPoints = series_points(timestamps, values, max_points).into();
     let ts = timestamps;
     let vals = values;
     let n = name.to_string();
@@ -157,14 +131,15 @@ pub fn triple_series_chart(
     x_vals: &[f64],
     y_vals: &[f64],
     z_vals: &[f64],
+    max_points: usize,
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
     reset: bool,
 ) -> Option<f64> {
-    let px: PlotPoints = decimated_points(timestamps, x_vals).into();
-    let py: PlotPoints = decimated_points(timestamps, y_vals).into();
-    let pz: PlotPoints = decimated_points(timestamps, z_vals).into();
+    let px: PlotPoints = series_points(timestamps, x_vals, max_points).into();
+    let py: PlotPoints = series_points(timestamps, y_vals, max_points).into();
+    let pz: PlotPoints = series_points(timestamps, z_vals, max_points).into();
     let ts = timestamps;
     let xv = x_vals;
     let yv = y_vals;
@@ -319,13 +294,14 @@ pub fn altitude_chart(
     timestamps: &[f64],
     gps_alt: &[f64],
     baro_alt: &[f64],
+    max_points: usize,
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
     reset: bool,
 ) -> Option<f64> {
-    let pts_gps: PlotPoints = decimated_points(timestamps, gps_alt).into();
-    let pts_baro: PlotPoints = decimated_points(timestamps, baro_alt).into();
+    let pts_gps: PlotPoints = series_points(timestamps, gps_alt, max_points).into();
+    let pts_baro: PlotPoints = series_points(timestamps, baro_alt, max_points).into();
     let ts = timestamps;
     let gv = gps_alt;
     let bv = baro_alt;
