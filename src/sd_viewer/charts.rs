@@ -11,11 +11,37 @@ fn decimated_points(timestamps: &[f64], values: &[f64]) -> Vec<[f64; 2]> {
     if len == 0 {
         return vec![];
     }
-    let step = (len / MAX_CHART_POINTS).max(1);
-    (0..len)
-        .step_by(step)
-        .map(|i| [timestamps[i], values[i]])
-        .collect()
+    if len <= MAX_CHART_POINTS {
+        return (0..len).map(|i| [timestamps[i], values[i]]).collect();
+    }
+
+    // Keep both extrema from each bucket so a short spike is not lost from the
+    // rendered line while plotting large logs remains bounded.
+    let bucket_size = len.div_ceil(MAX_CHART_POINTS);
+    let mut points = Vec::with_capacity(MAX_CHART_POINTS * 2);
+    for start in (0..len).step_by(bucket_size) {
+        let end = (start + bucket_size).min(len);
+        let (mut min_index, mut max_index) = (start, start);
+        for i in start + 1..end {
+            if values[i] < values[min_index] {
+                min_index = i;
+            }
+            if values[i] > values[max_index] {
+                max_index = i;
+            }
+        }
+
+        if min_index <= max_index {
+            points.push([timestamps[min_index], values[min_index]]);
+            if min_index != max_index {
+                points.push([timestamps[max_index], values[max_index]]);
+            }
+        } else {
+            points.push([timestamps[max_index], values[max_index]]);
+            points.push([timestamps[min_index], values[min_index]]);
+        }
+    }
+    points
 }
 
 fn lookup_by_timestamp(timestamps: &[f64], values: &[f64], t: f64) -> Option<f64> {
