@@ -74,6 +74,8 @@ impl FlightStateExt for FlightState {
             FlightState::Landed => "LANDED",
             FlightState::GroundAbort => "GROUND ABORT",
             FlightState::DescentAbort => "DESCENT ABORT",
+            FlightState::AscentAbort => "ASCENT ABORT",
+            FlightState::DeepCalibration => "DEEP CALIBRATION",
         }
     }
 
@@ -90,6 +92,8 @@ impl FlightStateExt for FlightState {
             FlightState::Landed => egui::Color32::from_rgb(80, 200, 80),
             FlightState::GroundAbort => egui::Color32::from_rgb(255, 50, 50),
             FlightState::DescentAbort => egui::Color32::from_rgb(255, 80, 80),
+            FlightState::AscentAbort => egui::Color32::from_rgb(255, 60, 60),
+            FlightState::DeepCalibration => egui::Color32::from_rgb(160, 120, 200),
         }
     }
 }
@@ -595,6 +599,7 @@ impl SdViewerState {
                     Command::Calibration => ("CMD: CALIBRATION", egui::Color32::from_rgb(180, 180, 100)),
                     Command::Drogue => ("CMD: DROGUE", egui::Color32::from_rgb(255, 165, 0)),
                     Command::Landed => ("CMD: LANDED", egui::Color32::from_rgb(80, 200, 80)),
+                    Command::RequestTelem => continue,
                     Command::None => unreachable!(),
                 };
                 self.timeline_markers.push(TimelineMarker {

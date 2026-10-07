@@ -22,6 +22,8 @@ pub enum FlightState {
     Landed = 8,
     GroundAbort = 9,
     DescentAbort = 10,
+    AscentAbort = 11,
+    DeepCalibration = 12,
 }
 
 impl FlightState {
@@ -38,6 +40,8 @@ impl FlightState {
             8 => Some(Self::Landed),
             9 => Some(Self::GroundAbort),
             10 => Some(Self::DescentAbort),
+            11 => Some(Self::AscentAbort),
+            12 => Some(Self::DeepCalibration),
             _ => None,
         }
     }
@@ -57,6 +61,8 @@ impl fmt::Display for FlightState {
             Self::Landed => write!(f, "LANDED"),
             Self::GroundAbort => write!(f, "GROUND ABORT"),
             Self::DescentAbort => write!(f, "DESCENT ABORT"),
+            Self::AscentAbort => write!(f, "ASCENT ABORT"),
+            Self::DeepCalibration => write!(f, "DEEP CALIBRATION"),
         }
     }
 }
@@ -72,7 +78,17 @@ pub const FAULT_NAMES: &[(u32, &str)] = &[
     (1 << 7, "IIS2MDCTR Perf Failed"),
     (1 << 8, "SD Mount Failed"),
     (1 << 9, "SD Open Failed"),
+    (1 << 10, "W25Q JEDEC ID Failed"),
+    (1 << 11, "W25Q Init Failed"),
 ];
+
+pub fn deep_cal_faces_captured(flags: u32) -> u8 {
+    ((flags >> 16) & 0x3F) as u8
+}
+
+pub fn deep_cal_current_face(flags: u32) -> u8 {
+    ((flags >> 22) & 0x07) as u8
+}
 
 pub fn active_faults(flags: u32) -> Vec<&'static str> {
     FAULT_NAMES
@@ -106,6 +122,7 @@ pub enum Command {
     Calibration = 0x03,
     Drogue = 0x04,
     Landed = 0x05,
+    RequestTelem = 0x06,
 }
 
 impl Command {
@@ -117,6 +134,7 @@ impl Command {
             0x03 => Some(Self::Calibration),
             0x04 => Some(Self::Drogue),
             0x05 => Some(Self::Landed),
+            0x06 => Some(Self::RequestTelem),
             _ => None,
         }
     }
@@ -135,6 +153,7 @@ impl fmt::Display for Command {
             Self::Calibration => write!(f, "CALIBRATION"),
             Self::Drogue => write!(f, "DROGUE"),
             Self::Landed => write!(f, "LANDED"),
+            Self::RequestTelem => write!(f, "REQUEST TELEM"),
         }
     }
 }

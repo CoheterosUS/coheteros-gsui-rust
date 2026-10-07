@@ -31,6 +31,8 @@ Any agent that reads this file should not assume that any information is correct
 | 8     | LANDED           |
 | 9     | GROUND_ABORT     |
 | 10    | DESCENT_ABORT    |
+| 11    | ASCENT_ABORT     |
+| 12    | DEEP_CALIBRATION |
 
 ## CommandType (Enum)
 
@@ -42,6 +44,7 @@ Any agent that reads this file should not assume that any information is correct
 | `0x03` | COMMAND_CALIBRATION  |                           |
 | `0x04` | COMMAND_DROGUE       |                           |
 | `0x05` | COMMAND_LANDED       |                           |
+| `0x06` | COMMAND_REQUEST_TELEM| Excluded From LastCommand |
 | `0x10` | COMMAND_HIL_DATA     | Excluded From LastCommand |
 | `0x20` | COMMAND_GPS_DATA     | Excluded From LastCommand |
 
@@ -59,6 +62,17 @@ Any agent that reads this file should not assume that any information is correct
 | 7   | IIS2MDCTR_MODE_PERFORMANCE_FAILED |
 | 8   | SD_MOUNT_FAILED                   |
 | 9   | SD_OPEN_FAILED                    |
+| 10  | W25Q_JEDEC_ID_FAILED              |
+| 11  | W25Q_INIT_FAILED                  |
+
+### Deep Calibration (bits 16-24)
+
+Present in Flags during STATE_DEEP_CALIBRATION. Zero otherwise.
+
+| Bits  | Field              | Description                                         |
+|-------|--------------------|-----------------------------------------------------|
+| 16-21 | FacesCaptured      | Bitmask: bit 0 = +Y, 1 = -Y, 2 = +X, 3 = -X, 4 = +Z, 5 = -Z |
+| 22-24 | CurrentFace + 1    | 0 = none detected, 1-6 = face index being measured  |
 
 ## RelayState (Bitmask)
 
@@ -95,7 +109,7 @@ Any agent that reads this file should not assume that any information is correct
 | VelX           | float  | m/s                 |                  |
 | VelY           | float  | m/s                 |                  |
 | VelZ           | float  | m/s                 |                  |
-| FaultFlags     | uint32 | Bitmask             | SystemFaultFlags |
+| FaultFlags     | uint32 | Bitmask             | Bits 0-15: SystemFaultFlags, Bits 16-24: Deep Calibration |
 | BatteryVoltage | float  | Volts               |                  |
 | State          | uint8  | SystemState         |                  |
 | RelayState     | uint8  | Bitmask             | RelayState       |

@@ -11,6 +11,9 @@ pub enum SerialCommand {
     Connect { port: String, baud: u32 },
     Disconnect,
     SendCommand(Command),
+    SetPollInterval(u64),
+    StartPolling,
+    StopPolling,
 }
 
 pub enum SerialEvent {
@@ -33,6 +36,9 @@ pub fn spawn(
         let mut read_buf = [0u8; 256];
         let mut last_port_scan = Instant::now();
         let port_scan_interval = Duration::from_secs(2);
+        let mut poll_interval_ms: u64 = 1000;
+        let mut polling_active = false;
+        let mut last_poll = Instant::now();
 
         loop {
             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -45,6 +51,7 @@ pub fn spawn(
                             Ok(p) => {
                                 port = Some(p);
                                 parser = StreamParser::new();
+                                last_poll = Instant::now();
                                 let _ = evt_tx.send(SerialEvent::Connected(name));
                             }
                             Err(e) => {
@@ -64,10 +71,28 @@ pub fn spawn(
                             }
                         }
                     }
+                    SerialCommand::SetPollInterval(ms) => {
+                        poll_interval_ms = ms;
+                    }
+                    SerialCommand::StartPolling => {
+                        polling_active = true;
+                        last_poll = Instant::now();
+                    }
+                    SerialCommand::StopPolling => {
+                        polling_active = false;
+                    }
                 }
             }
 
             if let Some(ref mut p) = port {
+                if polling_active && last_poll.elapsed() >= Duration::from_millis(poll_interval_ms) {
+                    last_poll = Instant::now();
+                    let frame = packet::build_command_frame(Command::RequestTelem);
+                    if let Err(e) = std::io::Write::write_all(p.as_mut(), &frame) {
+                        let _ = evt_tx.send(SerialEvent::Error(e.to_string()));
+                    }
+                }
+
                 let available = p.bytes_to_read().unwrap_or(0);
                 if available > 0 {
                     match p.read(&mut read_buf) {
@@ -87,7 +112,7 @@ pub fn spawn(
                         }
                     }
                 } else {
-                    thread::sleep(Duration::from_millis(10));
+                    thread::sleep(Duration::from_millis(1));
                 }
             } else {
                 thread::sleep(Duration::from_millis(50));

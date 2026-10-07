@@ -114,19 +114,35 @@ impl GroundStationApp {
                             port: self.state.selected_port.clone(),
                             baud: self.state.selected_baud,
                         });
+                        let _ = self.cmd_tx.send(SerialCommand::SetPollInterval(self.state.poll_interval_ms));
                     }
                 }
 
                 ui.separator();
-                ui.label("EXPECTED Hz");
-                egui::ComboBox::from_id_salt("expected_rate")
-                    .selected_text(format!("{}", self.state.expected_packet_rate))
-                    .width(50.0)
-                    .show_ui(ui, |ui| {
-                        for &rate in &[1, 10, 20, 25, 50, 100, 200] {
-                            ui.selectable_value(&mut self.state.expected_packet_rate, rate, format!("{}", rate));
+
+                if self.state.connected {
+                    if self.state.polling_active {
+                        if ui.button("STOP POLL").clicked() {
+                            self.state.polling_active = false;
+                            let _ = self.cmd_tx.send(SerialCommand::StopPolling);
                         }
-                    });
+                    } else {
+                        if ui.button("START POLL").clicked() {
+                            self.state.polling_active = true;
+                            let _ = self.cmd_tx.send(SerialCommand::SetPollInterval(self.state.poll_interval_ms));
+                            let _ = self.cmd_tx.send(SerialCommand::StartPolling);
+                        }
+                    }
+                }
+
+                ui.add_enabled_ui(!self.state.polling_active, |ui| {
+                    ui.label(format!("{} ms", self.state.poll_interval_ms));
+                    let prev = self.state.poll_interval_ms;
+                    ui.add(egui::Slider::new(&mut self.state.poll_interval_ms, 1000..=10000).suffix(" ms").text("POLL"));
+                    if self.state.poll_interval_ms != prev && self.state.connected {
+                        let _ = self.cmd_tx.send(SerialCommand::SetPollInterval(self.state.poll_interval_ms));
+                    }
+                });
 
                 if ui.button("CLEAR").clicked() {
                     self.state.clear_data();
@@ -213,7 +229,7 @@ impl GroundStationApp {
                         FlightState::Idle => egui::Color32::GRAY,
                         FlightState::Boost => egui::Color32::ORANGE,
                         FlightState::Apogee | FlightState::MainParachute => tc.green,
-                        FlightState::GroundAbort | FlightState::DescentAbort => tc.red_accent,
+                        FlightState::GroundAbort | FlightState::DescentAbort | FlightState::AscentAbort => tc.red_accent,
                         _ => tc.yellow,
                     };
                     let badge = egui::RichText::new(format!(" {} ", t.state))
@@ -270,7 +286,7 @@ impl GroundStationApp {
                 ui.separator();
                 ui.label(format!("{:.0} B/s", self.state.throughput_kbps));
                 ui.separator();
-                let expected = self.state.expected_packet_rate as f64;
+                let expected = 1000.0 / self.state.poll_interval_ms.max(1) as f64;
                 let actual = self.state.packets_per_sec;
                 let ratio = if expected > 0.0 { actual / expected } else { 1.0 };
                 let rate_color = if ratio >= 0.9 {
@@ -280,7 +296,7 @@ impl GroundStationApp {
                 } else {
                     tc.red_accent
                 };
-                ui.colored_label(rate_color, format!("{:.0}/{:.0} Hz ({:.0}%)", actual, expected, ratio * 100.0));
+                ui.colored_label(rate_color, format!("{:.1}/{:.1} Hz ({:.0}%)", actual, expected, ratio * 100.0));
             });
         });
 
@@ -455,10 +471,27 @@ impl GroundStationApp {
                                 ("IIM42653", t.flags & 0x30),
                                 ("IIS2MDCTR", t.flags & 0xC0),
                                 ("SD", t.flags & 0x300),
+                                ("W25Q", t.flags & 0xC00),
                             ];
                             for (name, bits) in fault_list {
                                 let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
                                 theme::data_row_colored(ui, name, status, color, dm);
+                            }
+
+                            if t.state == FlightState::DeepCalibration {
+                                let faces = packet::deep_cal_faces_captured(t.flags);
+                                let current = packet::deep_cal_current_face(t.flags);
+                                let face_names = ["+Y", "-Y", "+X", "-X", "+Z", "-Z"];
+                                let captured: Vec<&str> = face_names.iter().enumerate()
+                                    .filter(|(i, _)| faces & (1 << i) != 0)
+                                    .map(|(_, n)| *n)
+                                    .collect();
+                                let current_str = if current == 0 { "NONE".to_string() } else {
+                                    face_names.get((current - 1) as usize).unwrap_or(&"?").to_string()
+                                };
+                                ui.add_space(4.0);
+                                theme::data_row(ui, "FACES", &format!("{}/6 {}", captured.len(), captured.join(" ")), dm);
+                                theme::data_row(ui, "CURRENT", &current_str, dm);
                             }
                         }
                     });
@@ -554,6 +587,7 @@ impl eframe::App for GroundStationApp {
                 }
                 SerialEvent::Disconnected => {
                     self.state.connected = false;
+                    self.state.polling_active = false;
                     self.state.push_message("Disconnected");
                 }
                 SerialEvent::Error(e) => {
@@ -651,7 +685,7 @@ impl eframe::App for GroundStationApp {
             self.state.packet_count = n as u64;
             self.state.throughput_kbps = 648.0;
             self.state.packets_per_sec = 10.0;
-            self.state.expected_packet_rate = 10;
+            self.state.poll_interval_ms = 1000;
             self.show_about = false;
         }
 
@@ -1132,6 +1166,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                             ("IIM42653", r.flags & 0x30),
                             ("IIS2MDCTR", r.flags & 0xC0),
                             ("SD", r.flags & 0x300),
+                            ("W25Q", r.flags & 0xC00),
                         ];
                         for (name, bits) in fault_list {
                             let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
