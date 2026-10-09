@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "coheteros-gsui"
-version = "2025.10.1"
+version = "2026.10.1"
 dependencies = [
  "chrono",
  "crossbeam-channel",
