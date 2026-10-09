@@ -10,6 +10,7 @@ use crate::state::AppState;
 use crate::telemetry::packet::{self, Command, FlightState};
 use crate::ui;
 use crate::ui::theme;
+use crate::updater;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ActiveTab {
@@ -33,6 +34,7 @@ pub struct GroundStationApp {
     active_tab: ActiveTab,
     sd_viewer: SdViewerState,
     csv_viewer: SdViewerState,
+    update_status: Arc<Mutex<updater::UpdateStatus>>,
 }
 
 impl GroundStationApp {
@@ -69,6 +71,7 @@ impl GroundStationApp {
             active_tab: ActiveTab::LiveTelemetry,
             sd_viewer: SdViewerState::new(),
             csv_viewer: SdViewerState::new(),
+            update_status: updater::spawn_check(cc.egui_ctx.clone()),
         }
     }
 
@@ -818,6 +821,41 @@ impl eframe::App for GroundStationApp {
                         }
                         if ui.button("ABOUT").clicked() {
                             self.show_about = !self.show_about;
+                        }
+
+                        if let Ok(status) = self.update_status.lock() {
+                            match status.clone() {
+                                updater::UpdateStatus::Available { version, url } => {
+                                    drop(status);
+                                    let btn = egui::Button::new(
+                                        egui::RichText::new(format!("UPDATE v{}", version))
+                                            .color(egui::Color32::WHITE)
+                                            .family(egui::FontFamily::Name("Bold".into())),
+                                    ).fill(tc.green);
+                                    if ui.add(btn).clicked() {
+                                        updater::spawn_download(url, self.update_status.clone(), ui.ctx().clone());
+                                    }
+                                }
+                                updater::UpdateStatus::Downloading => {
+                                    ui.add(egui::Spinner::new().size(14.0));
+                                    ui.label("UPDATING...");
+                                }
+                                updater::UpdateStatus::ReadyToRestart => {
+                                    drop(status);
+                                    let btn = egui::Button::new(
+                                        egui::RichText::new("RESTART")
+                                            .color(egui::Color32::WHITE)
+                                            .family(egui::FontFamily::Name("Bold".into())),
+                                    ).fill(egui::Color32::from_rgb(0, 120, 215));
+                                    if ui.add(btn).clicked() {
+                                        updater::restart();
+                                    }
+                                }
+                                updater::UpdateStatus::Error(e) => {
+                                    ui.colored_label(tc.red_accent, format!("UPDATE ERR: {}", e));
+                                }
+                                _ => {}
+                            }
                         }
                     });
                 });

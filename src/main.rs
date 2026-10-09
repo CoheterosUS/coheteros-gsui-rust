@@ -9,6 +9,7 @@ mod serial;
 mod state;
 mod telemetry;
 mod ui;
+mod updater;
 
 fn load_icon() -> egui::IconData {
     let ico_bytes = include_bytes!("../assets/icon.ico");

@@ -1,6 +1,6 @@
 [package]
 name = "coheteros-gsui"
-version = "0.1.0"
+version = "2025.10.1"
 edition = "2024"
 
 [dependencies]
@@ -15,6 +15,10 @@ image = { version = "0.25", default-features = false, features = ["ico", "png"] 
 windows = { version = "0.61", features = ["Devices_Geolocation", "Foundation"] }
 rfd = "0.15"
 chrono = "0.4"
+ureq = "2"
+serde_json = "1"
+self-replace = "1"
+semver = "1"
 
 [build-dependencies]
 winres = "0.1"
