@@ -27,6 +27,8 @@ pub struct GroundStationApp {
     device_pos: Arc<Mutex<Option<(f64, f64)>>>,
     show_about: bool,
     csv_recorder: Option<CsvRecorder>,
+    controls_open: bool,
+    map_detached: bool,
     logo_texture: Option<egui::TextureHandle>,
     active_tab: ActiveTab,
     sd_viewer: SdViewerState,
@@ -61,6 +63,8 @@ impl GroundStationApp {
             device_pos,
             show_about: false,
             csv_recorder: None,
+            controls_open: false,
+            map_detached: false,
             logo_texture,
             active_tab: ActiveTab::LiveTelemetry,
             sd_viewer: SdViewerState::new(),
@@ -73,208 +77,13 @@ impl GroundStationApp {
         let tc = theme::current_theme(dm);
         let t = self.state.latest.clone();
 
-        // === TOP BAR: State + key values ===
-        egui::Panel::top("top_bar")
-            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
-            .show(root_ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                let no_ports = self.state.available_ports.is_empty();
-                ui.add_enabled_ui(!no_ports, |ui| {
-                    egui::ComboBox::from_id_salt("port_combo")
-                        .selected_text(if self.state.selected_port.is_empty() {
-                            "PORT"
-                        } else {
-                            self.state.selected_port.as_str()
-                        })
-                        .width(90.0)
-                        .show_ui(ui, |ui| {
-                            for p in &self.state.available_ports {
-                                ui.selectable_value(&mut self.state.selected_port, p.clone(), p);
-                            }
-                        });
-
-                    egui::ComboBox::from_id_salt("baud_combo")
-                        .selected_text(format!("{}", self.state.selected_baud))
-                        .width(70.0)
-                        .show_ui(ui, |ui| {
-                            for &rate in &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
-                                ui.selectable_value(&mut self.state.selected_baud, rate, format!("{}", rate));
-                            }
-                        });
-                });
-
-                if self.state.connected {
-                    if ui.button("DISCONNECT").clicked() {
-                        let _ = self.cmd_tx.send(SerialCommand::Disconnect);
-                    }
-                } else {
-                    let enabled = !self.state.selected_port.is_empty();
-                    if ui.add_enabled(enabled, egui::Button::new("CONNECT")).clicked() {
-                        let _ = self.cmd_tx.send(SerialCommand::Connect {
-                            port: self.state.selected_port.clone(),
-                            baud: self.state.selected_baud,
-                        });
-                        let _ = self.cmd_tx.send(SerialCommand::SetPollInterval(self.state.poll_interval_ms));
-                    }
-                }
-
-                ui.separator();
-
-                if self.state.connected {
-                    if self.state.polling_active {
-                        if ui.button("STOP POLL").clicked() {
-                            self.state.polling_active = false;
-                            let _ = self.cmd_tx.send(SerialCommand::StopPolling);
-                        }
-                    } else {
-                        if ui.button("START POLL").clicked() {
-                            self.state.polling_active = true;
-                            let _ = self.cmd_tx.send(SerialCommand::SetPollInterval(self.state.poll_interval_ms));
-                            let _ = self.cmd_tx.send(SerialCommand::StartPolling);
-                        }
-                    }
-                }
-
-                ui.add_enabled_ui(!self.state.polling_active, |ui| {
-                    ui.label(format!("{} ms", self.state.poll_interval_ms));
-                    let prev = self.state.poll_interval_ms;
-                    ui.add(egui::Slider::new(&mut self.state.poll_interval_ms, 1000..=10000).suffix(" ms").text("POLL"));
-                    if self.state.poll_interval_ms != prev && self.state.connected {
-                        let _ = self.cmd_tx.send(SerialCommand::SetPollInterval(self.state.poll_interval_ms));
-                    }
-                });
-
-                if ui.button("CLEAR").clicked() {
-                    self.state.clear_data();
-                }
-
-                if let Some(ref t) = t {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(format!("{:.2} \u{00b0}C", t.temperature_c)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::from_rgb(230, 70, 70))); ui.label("TEMP");
-                        ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).family(egui::FontFamily::Name("Bold".into()))); ui.label("PRESSURE");
-                        ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(tc.yellow)); ui.label("BATTERY");
-                        ui.add_space(12.0);
-                        ui.label(egui::RichText::new(format!("{}", t.tick)).family(egui::FontFamily::Name("Bold".into()))); ui.label("TICK");
-                    });
-                }
-            });
-        });
-
-        // === COMMAND BAR ===
-        egui::Panel::top("cmd_bar")
-            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
-            .show(root_ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label("FLIGHT COMMANDS");
-                ui.add_space(12.0);
-
-                ui.add_enabled_ui(self.state.connected, |ui| {
-                    let red_btn = |text: &str| {
-                        egui::Button::new(
-                            egui::RichText::new(text).color(egui::Color32::WHITE),
-                        ).fill(egui::Color32::DARK_RED)
-                    };
-
-                    if ui.add(red_btn("CALIBRATION")).clicked() {
-                        self.pending_command = Some(Command::Calibration);
-                    }
-                    if ui.add(red_btn("RESET")).clicked() {
-                        self.pending_command = Some(Command::Reset);
-                    }
-                    if ui.add(red_btn("GROUND ABORT")).clicked() {
-                        self.pending_command = Some(Command::GroundAbort);
-                    }
-
-                    ui.add_space(12.0);
-                    ui.label("ACTIONS");
-                    ui.add_space(12.0);
-
-                    if ui.add(red_btn("MARK LANDED")).clicked() {
-                        self.pending_command = Some(Command::Landed);
-                    }
-                    if ui.add(red_btn("DEPLOY DROGUE")).clicked() {
-                        self.pending_command = Some(Command::Drogue);
-                    }
-                });
-
-                ui.add_space(12.0);
-                ui.label("CSV");
-                ui.add_space(12.0);
-
-                if self.csv_recorder.is_some() {
-                    if ui.add(egui::Button::new(
-                        egui::RichText::new("STOP REC").color(egui::Color32::WHITE),
-                    ).fill(egui::Color32::from_rgb(220, 40, 40))).clicked() {
-                        self.csv_recorder = None;
-                        self.state.push_message("Recording stopped");
-                    }
-                } else if ui.add(egui::Button::new(
-                    egui::RichText::new("RECORD").color(egui::Color32::WHITE),
-                ).fill(tc.green)).clicked() {
-                    match CsvRecorder::new() {
-                        Ok(rec) => {
-                            self.state.push_message("Recording started");
-                            self.csv_recorder = Some(rec);
-                        }
-                        Err(e) => self.state.push_message(&format!("CSV error: {}", e)),
-                    }
-                }
-
-                ui.add_space(12.0);
-
-                if let Some(ref t) = t {
-                    let state_color = match t.state {
-                        FlightState::Idle => egui::Color32::GRAY,
-                        FlightState::Boost => egui::Color32::ORANGE,
-                        FlightState::Apogee | FlightState::MainParachute => tc.green,
-                        FlightState::GroundAbort | FlightState::DescentAbort | FlightState::AscentAbort => tc.red_accent,
-                        _ => tc.yellow,
-                    };
-                    let badge = egui::RichText::new(format!(" {} ", t.state))
-                        .color(egui::Color32::BLACK)
-                        .family(egui::FontFamily::Name("Bold".into()));
-                    ui.colored_label(state_color, badge);
-
-                    let faults = packet::active_faults(t.flags);
-                    if faults.is_empty() {
-                        ui.label("FAULTS: NONE");
-                    } else {
-                        ui.colored_label(tc.red_accent, format!("FAULTS: {}", faults.len()));
-                    }
-                } else {
-                    ui.label("NO TELEMETRY");
-                }
-            });
-        });
-
-        // === COMMAND CONFIRMATION ===
-        if let Some(cmd) = self.pending_command {
-            let modal = egui::Modal::new(egui::Id::new("cmd_confirm"))
-                .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(30.0).corner_radius(4.0));
-            let response = modal.show(root_ui.ctx(), |ui| {
-                ui.label(egui::RichText::new(format!("Send {}?", cmd)).size(18.0).family(egui::FontFamily::Name("Bold".into())));
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("CONFIRM").size(15.0)).clicked() {
-                        let _ = self.cmd_tx.send(SerialCommand::SendCommand(cmd));
-                        self.state.push_command(&format!("{}", cmd));
-                        self.pending_command = None;
-                    }
-                    if ui.button(egui::RichText::new("CANCEL").size(15.0)).clicked() {
-                        self.pending_command = None;
-                    }
-                });
-            });
-            if response.should_close() {
-                self.pending_command = None;
-            }
-        }
-
         // === BOTTOM STATUS BAR ===
         egui::Panel::bottom("status_bar").show(root_ui, |ui| {
             ui.horizontal(|ui| {
+                if ui.add_enabled(!self.controls_open, egui::Button::new("OPEN CONTROLS")).clicked() {
+                    self.controls_open = true;
+                }
+                ui.separator();
                 let (status, color) = if self.state.connected {
                     ("CONNECTED", tc.green)
                 } else {
@@ -338,94 +147,16 @@ impl GroundStationApp {
                 });
             });
 
-        // === MAP (rightmost) ===
-        egui::Panel::right("right_panel")
-            .default_size(300.0)
-            .min_size(250.0)
-            .resizable(true)
-            .show(root_ui, |ui| {
-                theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
-                    let current_gps = t.as_ref()
-                        .filter(|t| t.latitude != 0.0 || t.longitude != 0.0)
-                        .map(|t| (t.latitude, t.longitude));
-                    if self.state.lock_gps {
-                        self.map_state.memory.follow_my_position();
-                    }
-                    ui.horizontal(|ui| {
-                        let border_color = if self.state.lock_gps { tc.accent } else { tc.label_color };
-                        let checkbox_stroke = egui::Stroke::new(1.5, border_color);
-                        ui.scope(|ui| {
-                            let visuals = &mut ui.style_mut().visuals;
-                            visuals.widgets.inactive.bg_stroke = checkbox_stroke;
-                            visuals.widgets.hovered.bg_stroke = checkbox_stroke;
-                            visuals.widgets.active.bg_stroke = checkbox_stroke;
-                            ui.checkbox(&mut self.state.lock_gps, "LOCK ON GPS");
-                        });
-                    });
-                    ui.add_space(4.0);
-                    let map_rect = ui::map::gps_map(
-                        ui,
-                        &self.state.gps_trail,
-                        current_gps,
-                        self.state.ground_pos,
-                        &mut self.map_state,
-                    );
-
-                    if let Some(ref t) = t {
-                        let overlay_width = 195.0;
-                        let overlay_height = 100.0;
-                        let overlay_pos = egui::pos2(
-                            map_rect.right() - overlay_width - 4.0,
-                            map_rect.bottom() - overlay_height - 4.0,
-                        );
-                        let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
-
-                        let painter = ui.painter();
-                        let overlay_bg = if dm {
-                            egui::Color32::from_black_alpha(220)
-                        } else {
-                            egui::Color32::from_white_alpha(220)
-                        };
-                        painter.rect_filled(overlay_rect, 2.0, overlay_bg);
-
-                        let s = 14.0;
-                        let mut y = overlay_rect.top() + 5.0;
-                        let x_label = overlay_rect.left() + 8.0;
-                        let x_value = overlay_rect.left() + 44.0;
-                        let line_h = 18.0;
-
-                        let font = egui::FontId::monospace(s);
-                        let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
-
-                        let rows: &[(&str, String, egui::Color32)] = &[
-                            ("LAT", format!("{:.6}\u{00b0}", t.latitude), tc.value_color),
-                            ("LON", format!("{:.6}\u{00b0}", t.longitude), tc.value_color),
-                            ("ALT", format!("{:.1} m", t.gps_altitude), tc.value_color),
-                            ("SAT", format!("{}", t.satellites), if t.satellites >= 4 { tc.green } else { tc.red_accent }),
-                        ];
-                        for (label, value, color) in rows {
-                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
-                            painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
-                            y += line_h;
-                        }
-
-                        let link_rect = egui::Rect::from_min_size(
-                            egui::pos2(x_label, y),
-                            egui::vec2(overlay_width - 16.0, line_h),
-                        );
-                        let link_resp = ui.interact(link_rect, ui.id().with("live_gmaps_link"), egui::Sense::click());
-                        let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
-                        painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
-                        if link_resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if link_resp.clicked() {
-                            let url = format!("https://www.google.com/maps?q={},{}", t.latitude, t.longitude);
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
-                        }
-                    }
+        // === MAP (rightmost, or detached) ===
+        if !self.map_detached {
+            egui::Panel::right("right_panel")
+                .default_size(300.0)
+                .min_size(250.0)
+                .resizable(true)
+                .show(root_ui, |ui| {
+                    Self::render_map_content(ui, &t, &self.state.gps_trail, self.state.ground_pos, &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
                 });
-            });
+        }
 
         // === CENTER: Data grid (sticky) + Charts (scrollable) ===
         egui::CentralPanel::default().show(root_ui, |ui| {
@@ -560,6 +291,359 @@ impl GroundStationApp {
 
             });
         });
+    }
+
+    fn render_map_content(
+        ui: &mut egui::Ui,
+        t: &Option<packet::Telemetry>,
+        gps_trail: &std::collections::VecDeque<(f64, f64)>,
+        ground_pos: Option<(f64, f64)>,
+        lock_gps: &mut bool,
+        map_state: &mut ui::map::MapState,
+        dm: bool,
+        tc: &theme::ThemeColors,
+        map_detached: &mut bool,
+    ) {
+        let frame = egui::Frame::new()
+            .fill(tc.box_bg)
+            .stroke(egui::Stroke::new(1.0, tc.border_subtle))
+            .corner_radius(3.0)
+            .inner_margin(8.0);
+        frame.show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.spacing_mut().interact_size.y = 14.0;
+            ui.horizontal(|ui| {
+                ui.colored_label(tc.accent, egui::RichText::new("MAP").family(egui::FontFamily::Name("Bold".into())).size(12.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if *map_detached { "ATTACH" } else { "DETACH" };
+                    if ui.button(label).clicked() {
+                        *map_detached = !*map_detached;
+                    }
+                });
+            });
+            ui.add_space(1.0);
+            let current_gps = t.as_ref()
+                .filter(|t| t.latitude != 0.0 || t.longitude != 0.0)
+                .map(|t| (t.latitude, t.longitude));
+            if *lock_gps {
+                map_state.memory.follow_my_position();
+            }
+            ui.horizontal(|ui| {
+                let border_color = if *lock_gps { tc.accent } else { tc.label_color };
+                let checkbox_stroke = egui::Stroke::new(1.5, border_color);
+                ui.scope(|ui| {
+                    let visuals = &mut ui.style_mut().visuals;
+                    visuals.widgets.inactive.bg_stroke = checkbox_stroke;
+                    visuals.widgets.hovered.bg_stroke = checkbox_stroke;
+                    visuals.widgets.active.bg_stroke = checkbox_stroke;
+                    ui.checkbox(lock_gps, "LOCK ON GPS");
+                });
+            });
+            ui.add_space(4.0);
+            let map_rect = ui::map::gps_map(
+                ui,
+                gps_trail,
+                current_gps,
+                ground_pos,
+                map_state,
+            );
+
+            if let Some(t) = t.as_ref() {
+                let overlay_width = 195.0;
+                let overlay_height = 100.0;
+                let overlay_pos = egui::pos2(
+                    map_rect.right() - overlay_width - 4.0,
+                    map_rect.bottom() - overlay_height - 4.0,
+                );
+                let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
+
+                let painter = ui.painter();
+                let overlay_bg = if dm {
+                    egui::Color32::from_black_alpha(220)
+                } else {
+                    egui::Color32::from_white_alpha(220)
+                };
+                painter.rect_filled(overlay_rect, 2.0, overlay_bg);
+
+                let s = 14.0;
+                let mut y = overlay_rect.top() + 5.0;
+                let x_label = overlay_rect.left() + 8.0;
+                let x_value = overlay_rect.left() + 44.0;
+                let line_h = 18.0;
+
+                let font = egui::FontId::monospace(s);
+                let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
+
+                let rows: &[(&str, String, egui::Color32)] = &[
+                    ("LAT", format!("{:.6}\u{00b0}", t.latitude), tc.value_color),
+                    ("LON", format!("{:.6}\u{00b0}", t.longitude), tc.value_color),
+                    ("ALT", format!("{:.1} m", t.gps_altitude), tc.value_color),
+                    ("SAT", format!("{}", t.satellites), if t.satellites >= 4 { tc.green } else { tc.red_accent }),
+                ];
+                for (label, value, color) in rows {
+                    painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
+                    painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
+                    y += line_h;
+                }
+
+                let link_rect = egui::Rect::from_min_size(
+                    egui::pos2(x_label, y),
+                    egui::vec2(overlay_width - 16.0, line_h),
+                );
+                let link_resp = ui.interact(link_rect, ui.id().with("live_gmaps_link"), egui::Sense::click());
+                let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
+                painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
+                if link_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if link_resp.clicked() {
+                    let url = format!("https://www.google.com/maps?q={},{}", t.latitude, t.longitude);
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                }
+            }
+        });
+    }
+
+    fn render_map_viewport(&mut self, parent_ctx: &egui::Context) {
+        let dm = self.state.dark_mode;
+        let tc = theme::current_theme(dm);
+        let t = self.state.latest.clone();
+
+        let map_detached = &mut self.map_detached;
+        let gps_trail = &self.state.gps_trail;
+        let ground_pos = self.state.ground_pos;
+        let lock_gps = &mut self.state.lock_gps;
+        let map_state = &mut self.map_state;
+
+        parent_ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("gps_map"),
+            egui::ViewportBuilder::default()
+                .with_title("GPS Map \u{2014} Coheteros GS")
+                .with_inner_size([500.0, 500.0]),
+            |ctx, _class| {
+                theme::apply_visuals(ctx, dm);
+
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    *map_detached = false;
+                }
+
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(4.0))
+                    .show(ctx, |ui| {
+                        Self::render_map_content(ui, &t, gps_trail, ground_pos, lock_gps, map_state, dm, tc, map_detached);
+                    });
+            },
+        );
+    }
+
+    fn render_controls_viewport(&mut self, parent_ctx: &egui::Context) {
+        let dm = self.state.dark_mode;
+        let tc = theme::current_theme(dm);
+        let t = self.state.latest.clone();
+
+        let controls_open = &mut self.controls_open;
+        let state = &mut self.state;
+        let cmd_tx = &self.cmd_tx;
+        let pending_command = &mut self.pending_command;
+        let csv_recorder = &mut self.csv_recorder;
+
+        parent_ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("flight_controls"),
+            egui::ViewportBuilder::default()
+                .with_title("Flight Controls - Coheteros GS")
+                .with_inner_size([950.0, 130.0])
+                .with_always_on_top(),
+            |ctx, _class| {
+                theme::apply_visuals(ctx, dm);
+
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    *controls_open = false;
+                }
+
+                egui::Panel::top("ctrl_content")
+                    .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(8.0))
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            let no_ports = state.available_ports.is_empty();
+                            ui.add_enabled_ui(!no_ports, |ui| {
+                                egui::ComboBox::from_id_salt("ctrl_port_combo")
+                                    .selected_text(if state.selected_port.is_empty() { "PORT" } else { state.selected_port.as_str() })
+                                    .width(90.0)
+                                    .show_ui(ui, |ui| {
+                                        for p in &state.available_ports {
+                                            ui.selectable_value(&mut state.selected_port, p.clone(), p);
+                                        }
+                                    });
+
+                                egui::ComboBox::from_id_salt("ctrl_baud_combo")
+                                    .selected_text(format!("{}", state.selected_baud))
+                                    .width(70.0)
+                                    .show_ui(ui, |ui| {
+                                        for &rate in &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
+                                            ui.selectable_value(&mut state.selected_baud, rate, format!("{}", rate));
+                                        }
+                                    });
+                            });
+
+                            if state.connected {
+                                if ui.button("DISCONNECT").clicked() {
+                                    let _ = cmd_tx.send(SerialCommand::Disconnect);
+                                }
+                            } else {
+                                let enabled = !state.selected_port.is_empty();
+                                if ui.add_enabled(enabled, egui::Button::new("CONNECT")).clicked() {
+                                    let _ = cmd_tx.send(SerialCommand::Connect {
+                                        port: state.selected_port.clone(),
+                                        baud: state.selected_baud,
+                                    });
+                                    let _ = cmd_tx.send(SerialCommand::SetPollInterval(state.poll_interval_ms));
+                                }
+                            }
+
+                            ui.separator();
+
+                            if state.connected {
+                                if state.polling_active {
+                                    if ui.button("STOP POLL").clicked() {
+                                        state.polling_active = false;
+                                        let _ = cmd_tx.send(SerialCommand::StopPolling);
+                                    }
+                                } else {
+                                    if ui.button("START POLL").clicked() {
+                                        state.polling_active = true;
+                                        let _ = cmd_tx.send(SerialCommand::SetPollInterval(state.poll_interval_ms));
+                                        let _ = cmd_tx.send(SerialCommand::StartPolling);
+                                    }
+                                }
+                            }
+
+                            ui.add_enabled_ui(!state.polling_active, |ui| {
+                                ui.label(format!("{} ms", state.poll_interval_ms));
+                                let prev = state.poll_interval_ms;
+                                ui.add(egui::Slider::new(&mut state.poll_interval_ms, 1000..=10000).suffix(" ms").text("POLL"));
+                                if state.poll_interval_ms != prev && state.connected {
+                                    let _ = cmd_tx.send(SerialCommand::SetPollInterval(state.poll_interval_ms));
+                                }
+                            });
+
+                            if ui.button("CLEAR").clicked() {
+                                state.clear_data();
+                            }
+                        });
+
+                        ui.add_space(2.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("FLIGHT COMMANDS");
+                            ui.add_space(12.0);
+
+                            ui.add_enabled_ui(state.connected, |ui| {
+                                let red_btn = |text: &str| {
+                                    egui::Button::new(
+                                        egui::RichText::new(text).color(egui::Color32::WHITE),
+                                    ).fill(egui::Color32::DARK_RED)
+                                };
+
+                                if ui.add(red_btn("CALIBRATION")).clicked() {
+                                    *pending_command = Some(Command::Calibration);
+                                }
+                                if ui.add(red_btn("RESET")).clicked() {
+                                    *pending_command = Some(Command::Reset);
+                                }
+                                if ui.add(red_btn("GROUND ABORT")).clicked() {
+                                    *pending_command = Some(Command::GroundAbort);
+                                }
+
+                                ui.add_space(12.0);
+                                ui.label("ACTIONS");
+                                ui.add_space(12.0);
+
+                                if ui.add(red_btn("MARK LANDED")).clicked() {
+                                    *pending_command = Some(Command::Landed);
+                                }
+                                if ui.add(red_btn("DEPLOY DROGUE")).clicked() {
+                                    *pending_command = Some(Command::Drogue);
+                                }
+                            });
+
+                            ui.add_space(12.0);
+                            ui.label("CSV");
+                            ui.add_space(12.0);
+
+                            if csv_recorder.is_some() {
+                                if ui.add(egui::Button::new(
+                                    egui::RichText::new("STOP REC").color(egui::Color32::WHITE),
+                                ).fill(egui::Color32::from_rgb(220, 40, 40))).clicked() {
+                                    *csv_recorder = None;
+                                    state.push_message("Recording stopped");
+                                }
+                            } else if ui.add(egui::Button::new(
+                                egui::RichText::new("RECORD").color(egui::Color32::WHITE),
+                            ).fill(tc.green)).clicked() {
+                                match CsvRecorder::new() {
+                                    Ok(rec) => {
+                                        state.push_message("Recording started");
+                                        *csv_recorder = Some(rec);
+                                    }
+                                    Err(e) => state.push_message(&format!("CSV error: {}", e)),
+                                }
+                            }
+
+                            ui.add_space(12.0);
+
+                            if let Some(ref t) = t {
+                                let state_color = match t.state {
+                                    FlightState::Idle => egui::Color32::GRAY,
+                                    FlightState::Boost => egui::Color32::ORANGE,
+                                    FlightState::Apogee | FlightState::MainParachute => tc.green,
+                                    FlightState::GroundAbort | FlightState::DescentAbort | FlightState::AscentAbort => tc.red_accent,
+                                    _ => tc.yellow,
+                                };
+                                let badge = egui::RichText::new(format!(" {} ", t.state))
+                                    .color(egui::Color32::BLACK)
+                                    .family(egui::FontFamily::Name("Bold".into()));
+                                ui.colored_label(state_color, badge);
+
+                                let faults = packet::active_faults(t.flags);
+                                if faults.is_empty() {
+                                    ui.label("FAULTS: NONE");
+                                } else {
+                                    ui.colored_label(tc.red_accent, format!("FAULTS: {}", faults.len()));
+                                }
+                            } else {
+                                ui.label("NO TELEMETRY");
+                            }
+                        });
+                    });
+
+                // Command confirmation modal
+                if let Some(cmd) = *pending_command {
+                    let modal = egui::Modal::new(egui::Id::new("ctrl_cmd_confirm"))
+                        .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(30.0).corner_radius(4.0));
+                    let response = modal.show(ctx, |ui| {
+                        ui.label(egui::RichText::new(format!("Send {}?", cmd)).size(18.0).family(egui::FontFamily::Name("Bold".into())));
+                        ui.add_space(16.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(egui::RichText::new("CONFIRM").size(15.0)).clicked() {
+                                let _ = cmd_tx.send(SerialCommand::SendCommand(cmd));
+                                state.push_command(&format!("{}", cmd));
+                                *pending_command = None;
+                            }
+                            if ui.button(egui::RichText::new("CANCEL").size(15.0)).clicked() {
+                                *pending_command = None;
+                            }
+                        });
+                    });
+                    if response.should_close() {
+                        *pending_command = None;
+                    }
+                }
+            },
+        );
+
+        if !self.controls_open {
+            self.pending_command = None;
+        }
     }
 }
 
@@ -738,6 +822,13 @@ impl eframe::App for GroundStationApp {
                     });
                 });
             });
+
+        if self.controls_open {
+            self.render_controls_viewport(root_ui.ctx());
+        }
+        if self.map_detached {
+            self.render_map_viewport(root_ui.ctx());
+        }
 
         match self.active_tab {
             ActiveTab::LiveTelemetry => self.render_live_telemetry(root_ui),
