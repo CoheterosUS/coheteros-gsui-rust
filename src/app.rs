@@ -109,6 +109,21 @@ impl GroundStationApp {
                     tc.red_accent
                 };
                 ui.colored_label(rate_color, format!("{:.1}/{:.1} Hz ({:.0}%)", actual, expected, ratio * 100.0));
+
+                if let Some(ref t) = t {
+                    ui.separator();
+                    ui.label("TICK");
+                    ui.label(egui::RichText::new(format!("{}", t.tick)).family(egui::FontFamily::Name("Bold".into())));
+                    ui.separator();
+                    ui.label("BATTERY");
+                    ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(tc.yellow));
+                    ui.separator();
+                    ui.label("PRESSURE");
+                    ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).family(egui::FontFamily::Name("Bold".into())));
+                    ui.separator();
+                    ui.label("TEMP");
+                    ui.label(egui::RichText::new(format!("{:.2} °C", t.temperature_c)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::from_rgb(230, 70, 70)));
+                }
             });
         });
 
@@ -521,9 +536,9 @@ impl GroundStationApp {
                             }
 
                             ui.add_enabled_ui(!state.polling_active, |ui| {
-                                ui.label(format!("{} ms", state.poll_interval_ms));
+                                ui.label(format!("{} ms ({:.1} Hz)", state.poll_interval_ms, 1000.0 / state.poll_interval_ms.max(1) as f64));
                                 let prev = state.poll_interval_ms;
-                                ui.add(egui::Slider::new(&mut state.poll_interval_ms, 1000..=10000).suffix(" ms").text("POLL"));
+                                ui.add(egui::Slider::new(&mut state.poll_interval_ms, 50..=10000).suffix(" ms").text("POLL").logarithmic(true));
                                 if state.poll_interval_ms != prev && state.connected {
                                     let _ = cmd_tx.send(SerialCommand::SetPollInterval(state.poll_interval_ms));
                                 }
