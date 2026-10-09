@@ -703,7 +703,7 @@ impl eframe::App for GroundStationApp {
                     }
                     ui.label(egui::RichText::new("COHETEROS GROUND STATION").family(egui::FontFamily::Name("Bold".into())).size(22.0).color(tc.accent));
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(15.0).color(tc.label_color));
+                    ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION").to_string()).size(15.0).color(tc.label_color));
                     ui.add_space(16.0);
                     ui.label(egui::RichText::new("BUILT BY THE COHETEROS TEAM\nFOR THE EUROPEAN ROCKETRY CHALLENGE").size(14.0).color(tc.value_color));
                     ui.add_space(16.0);
@@ -828,7 +828,7 @@ impl eframe::App for GroundStationApp {
                                 updater::UpdateStatus::Available { version, url } => {
                                     drop(status);
                                     let btn = egui::Button::new(
-                                        egui::RichText::new(format!("UPDATE v{}", version))
+                                        egui::RichText::new(format!("UPDATE {}", version))
                                             .color(egui::Color32::WHITE)
                                             .family(egui::FontFamily::Name("Bold".into())),
                                     ).fill(tc.green);
