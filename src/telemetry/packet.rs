@@ -169,6 +169,18 @@ pub fn build_command_frame(cmd: Command) -> [u8; 5] {
     frame
 }
 
+pub fn build_command_frame_with_payload(cmd: Command, payload: &[u8]) -> Vec<u8> {
+    let sync = SYNC_WORD.to_le_bytes();
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(sync[0]);
+    frame.push(sync[1]);
+    frame.push(cmd.command_byte());
+    frame.push(payload.len() as u8);
+    frame.extend_from_slice(payload);
+    frame.push(SYNC_END);
+    frame
+}
+
 pub struct PacketField {
     pub name: &'static str,
     pub offset: usize,

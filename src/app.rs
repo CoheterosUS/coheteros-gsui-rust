@@ -25,6 +25,8 @@ pub struct GroundStationApp {
     evt_rx: Receiver<SerialEvent>,
     map_state: ui::map::MapState,
     pending_command: Option<Command>,
+    pending_payload: Option<Vec<u8>>,
+    pitch_angle_deg: f32,
     device_pos: Arc<Mutex<Option<(f64, f64)>>>,
     show_about: bool,
     csv_recorder: Option<CsvRecorder>,
@@ -62,6 +64,8 @@ impl GroundStationApp {
             evt_rx,
             map_state: ui::map::MapState::new(&cc.egui_ctx),
             pending_command: None,
+            pending_payload: None,
+            pitch_angle_deg: 90.0,
             device_pos,
             show_about: false,
             csv_recorder: None,
@@ -463,7 +467,9 @@ impl GroundStationApp {
         let state = &mut self.state;
         let cmd_tx = &self.cmd_tx;
         let pending_command = &mut self.pending_command;
+        let pending_payload = &mut self.pending_payload;
         let csv_recorder = &mut self.csv_recorder;
+        let pitch_angle_deg = &mut self.pitch_angle_deg;
 
         parent_ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("flight_controls"),
@@ -565,6 +571,12 @@ impl GroundStationApp {
                                 if ui.add(red_btn("CALIBRATION")).clicked() {
                                     *pending_command = Some(Command::Calibration);
                                 }
+                                ui.add(egui::Slider::new(pitch_angle_deg, 0.0..=90.0).suffix("°").text("PITCH"));
+                                if ui.add(red_btn("CALIBRATION WITH PITCH")).clicked() {
+                                    let pitch_rad = pitch_angle_deg.to_radians();
+                                    *pending_payload = Some(pitch_rad.to_le_bytes().to_vec());
+                                    *pending_command = Some(Command::Calibration);
+                                }
                                 if ui.add(red_btn("RESET")).clicked() {
                                     *pending_command = Some(Command::Reset);
                                 }
@@ -638,22 +650,37 @@ impl GroundStationApp {
                 if let Some(cmd) = *pending_command {
                     let modal = egui::Modal::new(egui::Id::new("ctrl_cmd_confirm"))
                         .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(30.0).corner_radius(4.0));
+                    let has_payload = pending_payload.is_some();
+                    let label = if has_payload {
+                        let pitch_rad = f32::from_le_bytes([pending_payload.as_ref().unwrap()[0], pending_payload.as_ref().unwrap()[1], pending_payload.as_ref().unwrap()[2], pending_payload.as_ref().unwrap()[3]]);
+                        format!("Send {} (pitch={:.1}°)?", cmd, pitch_rad.to_degrees())
+                    } else {
+                        format!("Send {}?", cmd)
+                    };
                     let response = modal.show(ctx, |ui| {
-                        ui.label(egui::RichText::new(format!("Send {}?", cmd)).size(18.0).family(egui::FontFamily::Name("Bold".into())));
+                        ui.label(egui::RichText::new(label).size(18.0).family(egui::FontFamily::Name("Bold".into())));
                         ui.add_space(16.0);
                         ui.horizontal(|ui| {
                             if ui.button(egui::RichText::new("CONFIRM").size(15.0)).clicked() {
-                                let _ = cmd_tx.send(SerialCommand::SendCommand(cmd));
-                                state.push_command(&format!("{}", cmd));
+                                if let Some(payload) = pending_payload.take() {
+                                    let pitch_rad = f32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                                    let _ = cmd_tx.send(SerialCommand::SendCommandWithPayload(cmd, payload));
+                                    state.push_command(&format!("{} (pitch={:.1}°)", cmd, pitch_rad.to_degrees()));
+                                } else {
+                                    let _ = cmd_tx.send(SerialCommand::SendCommand(cmd));
+                                    state.push_command(&format!("{}", cmd));
+                                }
                                 *pending_command = None;
                             }
                             if ui.button(egui::RichText::new("CANCEL").size(15.0)).clicked() {
                                 *pending_command = None;
+                                *pending_payload = None;
                             }
                         });
                     });
                     if response.should_close() {
                         *pending_command = None;
+                        *pending_payload = None;
                     }
                 }
             },
@@ -661,6 +688,7 @@ impl GroundStationApp {
 
         if !self.controls_open {
             self.pending_command = None;
+            self.pending_payload = None;
         }
     }
 }

@@ -11,6 +11,7 @@ pub enum SerialCommand {
     Connect { port: String, baud: u32 },
     Disconnect,
     SendCommand(Command),
+    SendCommandWithPayload(Command, Vec<u8>),
     SetPollInterval(u64),
     StartPolling,
     StopPolling,
@@ -66,6 +67,14 @@ pub fn spawn(
                     SerialCommand::SendCommand(cmd) => {
                         if let Some(ref mut p) = port {
                             let frame = packet::build_command_frame(cmd);
+                            if let Err(e) = std::io::Write::write_all(p.as_mut(), &frame) {
+                                let _ = evt_tx.send(SerialEvent::Error(e.to_string()));
+                            }
+                        }
+                    }
+                    SerialCommand::SendCommandWithPayload(cmd, payload) => {
+                        if let Some(ref mut p) = port {
+                            let frame = packet::build_command_frame_with_payload(cmd, &payload);
                             if let Err(e) = std::io::Write::write_all(p.as_mut(), &frame) {
                                 let _ = evt_tx.send(SerialEvent::Error(e.to_string()));
                             }
