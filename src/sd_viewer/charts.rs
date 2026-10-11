@@ -294,6 +294,7 @@ pub fn altitude_chart(
     timestamps: &[f64],
     gps_alt: &[f64],
     baro_alt: &[f64],
+    baro_alt_raw: &[f64],
     max_points: usize,
     selected_t: Option<f64>,
     zoom_x: Option<(f64, f64)>,
@@ -302,9 +303,11 @@ pub fn altitude_chart(
 ) -> Option<f64> {
     let pts_gps: PlotPoints = series_points(timestamps, gps_alt, max_points).into();
     let pts_baro: PlotPoints = series_points(timestamps, baro_alt, max_points).into();
+    let pts_raw: PlotPoints = series_points(timestamps, baro_alt_raw, max_points).into();
     let ts = timestamps;
     let gv = gps_alt;
     let bv = baro_alt;
+    let rv = baro_alt_raw;
     let plot_response = sd_plot("sd_altitude", link_axes, reset)
         .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(move |hover| {
@@ -313,8 +316,11 @@ pub fn altitude_chart(
             if let Some(val) = lookup_by_timestamp(ts, gv, x) {
                 lines.push(format!("GPS: {:.2} m", val));
             }
+            if let Some(val) = lookup_by_timestamp(ts, rv, x) {
+                lines.push(format!("Baro Raw: {:.2} m", val));
+            }
             if let Some(val) = lookup_by_timestamp(ts, bv, x) {
-                lines.push(format!("Baro: {:.2} m", val));
+                lines.push(format!("Baro Filtered: {:.2} m", val));
             }
             if lines.is_empty() { None } else { Some(lines.join("\n")) }
         })
@@ -323,7 +329,8 @@ pub fn altitude_chart(
                 plot_ui.set_plot_bounds_x(lo..=hi);
             }
             plot_ui.line(Line::new("GPS", pts_gps));
-            plot_ui.line(Line::new("Baro", pts_baro));
+            plot_ui.line(Line::new("Baro Raw", pts_raw));
+            plot_ui.line(Line::new("Baro Filtered", pts_baro));
             if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
             }

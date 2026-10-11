@@ -128,6 +128,7 @@ pub struct SdViewerState {
     pub temperature: Vec<f64>,
     pub battery: Vec<f64>,
     pub baro_altitude: Vec<f64>,
+    pub baro_altitude_raw: Vec<f64>,
     pub baro_velocity: Vec<f64>,
     pub gaps: Vec<GapInfo>,
     pub state_segments: Vec<StateSegment>,
@@ -177,6 +178,7 @@ impl SdViewerState {
             temperature: Vec::new(),
             battery: Vec::new(),
             baro_altitude: Vec::new(),
+            baro_altitude_raw: Vec::new(),
             baro_velocity: Vec::new(),
             gaps: Vec::new(),
             state_segments: Vec::new(),
@@ -426,6 +428,7 @@ impl SdViewerState {
         self.temperature.reserve(count);
         self.battery.reserve(count);
         self.baro_altitude.reserve(count);
+        self.baro_altitude_raw.reserve(count);
         self.baro_velocity.reserve(count);
 
         let ref_pressure = Self::compute_reference_pressure(records);
@@ -459,6 +462,7 @@ impl SdViewerState {
             if r.pressure_pa > 0.0 && ref_pressure > 0.0 {
                 let temp_k = r.temperature_c + 273.15;
                 let raw_alt = (R * temp_k / G) * (ref_pressure / r.pressure_pa).ln();
+                self.baro_altitude_raw.push(raw_alt);
                 let filt = match filtered_alt {
                     Some(prev) => prev + ALPHA * (raw_alt - prev),
                     None => raw_alt,
@@ -479,6 +483,7 @@ impl SdViewerState {
                 self.baro_velocity.push(vel);
             } else {
                 self.baro_altitude.push(0.0);
+                self.baro_altitude_raw.push(0.0);
                 self.baro_velocity.push(0.0);
             }
         }
@@ -599,6 +604,7 @@ impl SdViewerState {
                     Command::Calibration => ("CMD: CALIBRATION", egui::Color32::from_rgb(180, 180, 100)),
                     Command::Drogue => ("CMD: DROGUE", egui::Color32::from_rgb(255, 165, 0)),
                     Command::Landed => ("CMD: LANDED", egui::Color32::from_rgb(80, 200, 80)),
+                    Command::DeepCalibration => ("CMD: DEEP CAL", egui::Color32::from_rgb(160, 120, 200)),
                     Command::RequestTelem => continue,
                     Command::None => unreachable!(),
                 };
@@ -713,6 +719,7 @@ impl SdViewerState {
         self.temperature.clear();
         self.battery.clear();
         self.baro_altitude.clear();
+        self.baro_altitude_raw.clear();
         self.baro_velocity.clear();
         self.gaps.clear();
         self.gps_trail.clear();

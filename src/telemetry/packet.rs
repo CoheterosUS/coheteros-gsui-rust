@@ -80,14 +80,15 @@ pub const FAULT_NAMES: &[(u32, &str)] = &[
     (1 << 9, "SD Open Failed"),
     (1 << 10, "W25Q JEDEC ID Failed"),
     (1 << 11, "W25Q Init Failed"),
+    (1 << 12, "W25Q Cal Write Failed"),
 ];
 
 pub fn deep_cal_faces_captured(flags: u32) -> u8 {
-    ((flags >> 16) & 0x3F) as u8
+    ((flags >> 16) & 0x07) as u8
 }
 
 pub fn deep_cal_current_face(flags: u32) -> u8 {
-    ((flags >> 22) & 0x07) as u8
+    ((flags >> 19) & 0x07) as u8
 }
 
 pub fn active_faults(flags: u32) -> Vec<&'static str> {
@@ -123,6 +124,7 @@ pub enum Command {
     Drogue = 0x04,
     Landed = 0x05,
     RequestTelem = 0x06,
+    DeepCalibration = 0x07,
 }
 
 impl Command {
@@ -135,6 +137,7 @@ impl Command {
             0x04 => Some(Self::Drogue),
             0x05 => Some(Self::Landed),
             0x06 => Some(Self::RequestTelem),
+            0x07 => Some(Self::DeepCalibration),
             _ => None,
         }
     }
@@ -154,6 +157,7 @@ impl fmt::Display for Command {
             Self::Drogue => write!(f, "DROGUE"),
             Self::Landed => write!(f, "LANDED"),
             Self::RequestTelem => write!(f, "REQUEST TELEM"),
+            Self::DeepCalibration => write!(f, "DEEP CALIBRATION"),
         }
     }
 }

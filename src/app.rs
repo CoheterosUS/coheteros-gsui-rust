@@ -27,6 +27,7 @@ pub struct GroundStationApp {
     pending_command: Option<Command>,
     pending_payload: Option<Vec<u8>>,
     pitch_angle_deg: f32,
+    deep_cal_face: u8,
     device_pos: Arc<Mutex<Option<(f64, f64)>>>,
     show_about: bool,
     csv_recorder: Option<CsvRecorder>,
@@ -66,6 +67,7 @@ impl GroundStationApp {
             pending_command: None,
             pending_payload: None,
             pitch_angle_deg: 90.0,
+            deep_cal_face: 1,
             device_pos,
             show_about: false,
             csv_recorder: None,
@@ -224,7 +226,7 @@ impl GroundStationApp {
                                 ("IIM42653", t.flags & 0x30),
                                 ("IIS2MDCTR", t.flags & 0xC0),
                                 ("SD", t.flags & 0x300),
-                                ("W25Q", t.flags & 0xC00),
+                                ("W25Q", t.flags & 0x1C00),
                             ];
                             for (name, bits) in fault_list {
                                 let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
@@ -232,18 +234,14 @@ impl GroundStationApp {
                             }
 
                             if t.state == FlightState::DeepCalibration {
-                                let faces = packet::deep_cal_faces_captured(t.flags);
+                                let faces_count = packet::deep_cal_faces_captured(t.flags);
                                 let current = packet::deep_cal_current_face(t.flags);
-                                let face_names = ["+Y", "-Y", "+X", "-X", "+Z", "-Z"];
-                                let captured: Vec<&str> = face_names.iter().enumerate()
-                                    .filter(|(i, _)| faces & (1 << i) != 0)
-                                    .map(|(_, n)| *n)
-                                    .collect();
+                                let face_names = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
                                 let current_str = if current == 0 { "NONE".to_string() } else {
                                     face_names.get((current - 1) as usize).unwrap_or(&"?").to_string()
                                 };
                                 ui.add_space(4.0);
-                                theme::data_row(ui, "FACES", &format!("{}/6 {}", captured.len(), captured.join(" ")), dm);
+                                theme::data_row(ui, "FACES", &format!("{}/6", faces_count), dm);
                                 theme::data_row(ui, "CURRENT", &current_str, dm);
                             }
                         }
@@ -470,12 +468,13 @@ impl GroundStationApp {
         let pending_payload = &mut self.pending_payload;
         let csv_recorder = &mut self.csv_recorder;
         let pitch_angle_deg = &mut self.pitch_angle_deg;
+        let deep_cal_face = &mut self.deep_cal_face;
 
         parent_ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("flight_controls"),
             egui::ViewportBuilder::default()
                 .with_title("Flight Controls - Coheteros GS")
-                .with_inner_size([950.0, 130.0])
+                .with_inner_size([1600.0, 130.0])
                 .with_always_on_top(),
             |ctx, _class| {
                 theme::apply_visuals(ctx, dm);
@@ -487,7 +486,20 @@ impl GroundStationApp {
                 egui::Panel::top("ctrl_content")
                     .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(8.0))
                     .show(ctx, |ui| {
+                        let section_label = |ui: &mut egui::Ui, text: &str| {
+                            ui.label(egui::RichText::new(text).size(10.0).color(tc.label_color));
+                        };
+
+                        let red_btn = |text: &str| {
+                            egui::Button::new(
+                                egui::RichText::new(text).color(egui::Color32::WHITE),
+                            ).fill(egui::Color32::DARK_RED)
+                        };
+
+                        // Row 1: Connection + Polling + Status
                         ui.horizontal(|ui| {
+                            // -- Connection --
+                            section_label(ui, "CONNECTION");
                             let no_ports = state.available_ports.is_empty();
                             ui.add_enabled_ui(!no_ports, |ui| {
                                 egui::ComboBox::from_id_salt("ctrl_port_combo")
@@ -498,7 +510,6 @@ impl GroundStationApp {
                                             ui.selectable_value(&mut state.selected_port, p.clone(), p);
                                         }
                                     });
-
                                 egui::ComboBox::from_id_salt("ctrl_baud_combo")
                                     .selected_text(format!("{}", state.selected_baud))
                                     .width(70.0)
@@ -508,7 +519,6 @@ impl GroundStationApp {
                                         }
                                     });
                             });
-
                             if state.connected {
                                 if ui.button("DISCONNECT").clicked() {
                                     let _ = cmd_tx.send(SerialCommand::Disconnect);
@@ -526,6 +536,8 @@ impl GroundStationApp {
 
                             ui.separator();
 
+                            // -- Polling --
+                            section_label(ui, "TELEMETRY");
                             if state.connected {
                                 if state.polling_active {
                                     if ui.button("STOP POLL").clicked() {
@@ -540,75 +552,28 @@ impl GroundStationApp {
                                     }
                                 }
                             }
-
                             ui.add_enabled_ui(!state.polling_active, |ui| {
-                                ui.label(format!("{} ms ({:.1} Hz)", state.poll_interval_ms, 1000.0 / state.poll_interval_ms.max(1) as f64));
                                 let prev = state.poll_interval_ms;
-                                ui.add(egui::Slider::new(&mut state.poll_interval_ms, 50..=10000).suffix(" ms").text("POLL").logarithmic(true));
+                                ui.add(egui::Slider::new(&mut state.poll_interval_ms, 50..=10000).suffix(" ms").logarithmic(true));
                                 if state.poll_interval_ms != prev && state.connected {
                                     let _ = cmd_tx.send(SerialCommand::SetPollInterval(state.poll_interval_ms));
                                 }
                             });
+                            ui.label(format!("{:.1} Hz", 1000.0 / state.poll_interval_ms.max(1) as f64));
 
-                            if ui.button("CLEAR").clicked() {
-                                state.clear_data();
-                            }
-                        });
+                            ui.separator();
 
-                        ui.add_space(2.0);
-
-                        ui.horizontal(|ui| {
-                            ui.label("FLIGHT COMMANDS");
-                            ui.add_space(12.0);
-
-                            ui.add_enabled_ui(state.connected, |ui| {
-                                let red_btn = |text: &str| {
-                                    egui::Button::new(
-                                        egui::RichText::new(text).color(egui::Color32::WHITE),
-                                    ).fill(egui::Color32::DARK_RED)
-                                };
-
-                                if ui.add(red_btn("CALIBRATION")).clicked() {
-                                    *pending_command = Some(Command::Calibration);
-                                }
-                                ui.add(egui::Slider::new(pitch_angle_deg, 0.0..=90.0).suffix("°").text("PITCH"));
-                                if ui.add(red_btn("CALIBRATION WITH PITCH")).clicked() {
-                                    let pitch_rad = pitch_angle_deg.to_radians();
-                                    *pending_payload = Some(pitch_rad.to_le_bytes().to_vec());
-                                    *pending_command = Some(Command::Calibration);
-                                }
-                                if ui.add(red_btn("RESET")).clicked() {
-                                    *pending_command = Some(Command::Reset);
-                                }
-                                if ui.add(red_btn("GROUND ABORT")).clicked() {
-                                    *pending_command = Some(Command::GroundAbort);
-                                }
-
-                                ui.add_space(12.0);
-                                ui.label("ACTIONS");
-                                ui.add_space(12.0);
-
-                                if ui.add(red_btn("MARK LANDED")).clicked() {
-                                    *pending_command = Some(Command::Landed);
-                                }
-                                if ui.add(red_btn("DEPLOY DROGUE")).clicked() {
-                                    *pending_command = Some(Command::Drogue);
-                                }
-                            });
-
-                            ui.add_space(12.0);
-                            ui.label("CSV");
-                            ui.add_space(12.0);
-
+                            // -- CSV --
+                            section_label(ui, "CSV");
                             if csv_recorder.is_some() {
                                 if ui.add(egui::Button::new(
-                                    egui::RichText::new("STOP REC").color(egui::Color32::WHITE),
+                                    egui::RichText::new("⏹ STOP REC").color(egui::Color32::WHITE),
                                 ).fill(egui::Color32::from_rgb(220, 40, 40))).clicked() {
                                     *csv_recorder = None;
                                     state.push_message("Recording stopped");
                                 }
                             } else if ui.add(egui::Button::new(
-                                egui::RichText::new("RECORD").color(egui::Color32::WHITE),
+                                egui::RichText::new("⏺ RECORD").color(egui::Color32::WHITE),
                             ).fill(tc.green)).clicked() {
                                 match CsvRecorder::new() {
                                     Ok(rec) => {
@@ -619,8 +584,13 @@ impl GroundStationApp {
                                 }
                             }
 
-                            ui.add_space(12.0);
+                            if ui.button("CLEAR DATA").clicked() {
+                                state.clear_data();
+                            }
 
+                            ui.separator();
+
+                            // -- Status badge --
                             if let Some(ref t) = t {
                                 let state_color = match t.state {
                                     FlightState::Idle => egui::Color32::GRAY,
@@ -636,13 +606,69 @@ impl GroundStationApp {
 
                                 let faults = packet::active_faults(t.flags);
                                 if faults.is_empty() {
-                                    ui.label("FAULTS: NONE");
+                                    ui.label("NO FAULTS");
                                 } else {
-                                    ui.colored_label(tc.red_accent, format!("FAULTS: {}", faults.len()));
+                                    ui.colored_label(tc.red_accent, format!("⚠ {} FAULTS", faults.len()));
                                 }
                             } else {
                                 ui.label("NO TELEMETRY");
                             }
+                        });
+
+                        ui.add_space(4.0);
+
+                        // Row 2: Flight commands
+                        ui.horizontal(|ui| {
+                            ui.add_enabled_ui(state.connected, |ui| {
+                                // -- Calibration group --
+                                section_label(ui, "CALIBRATION");
+                                ui.add(egui::Slider::new(pitch_angle_deg, 0.0..=90.0).suffix("°").text("PITCH"));
+                                if ui.add(red_btn("CALIBRATE")).clicked() {
+                                    let pitch_rad = pitch_angle_deg.to_radians();
+                                    *pending_payload = Some(pitch_rad.to_le_bytes().to_vec());
+                                    *pending_command = Some(Command::Calibration);
+                                }
+
+                                ui.separator();
+
+                                // -- Deep calibration group --
+                                section_label(ui, "DEEP CAL");
+                                let face_names = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
+                                egui::ComboBox::from_id_salt("deep_cal_face")
+                                    .selected_text(*face_names.get((*deep_cal_face - 1) as usize).unwrap_or(&"?"))
+                                    .width(50.0)
+                                    .show_ui(ui, |ui| {
+                                        for (i, name) in face_names.iter().enumerate() {
+                                            ui.selectable_value(deep_cal_face, (i + 1) as u8, *name);
+                                        }
+                                    });
+                                if ui.add(red_btn("SEND FACE")).clicked() {
+                                    *pending_payload = Some(vec![*deep_cal_face]);
+                                    *pending_command = Some(Command::DeepCalibration);
+                                }
+
+                                ui.separator();
+
+                                // -- Safety commands --
+                                section_label(ui, "SAFETY");
+                                if ui.add(red_btn("RESET")).clicked() {
+                                    *pending_command = Some(Command::Reset);
+                                }
+                                if ui.add(red_btn("GROUND ABORT")).clicked() {
+                                    *pending_command = Some(Command::GroundAbort);
+                                }
+
+                                ui.separator();
+
+                                // -- Recovery actions --
+                                section_label(ui, "RECOVERY");
+                                if ui.add(red_btn("DEPLOY DROGUE")).clicked() {
+                                    *pending_command = Some(Command::Drogue);
+                                }
+                                if ui.add(red_btn("MARK LANDED")).clicked() {
+                                    *pending_command = Some(Command::Landed);
+                                }
+                            });
                         });
                     });
 
@@ -650,12 +676,17 @@ impl GroundStationApp {
                 if let Some(cmd) = *pending_command {
                     let modal = egui::Modal::new(egui::Id::new("ctrl_cmd_confirm"))
                         .frame(egui::Frame::new().fill(tc.modal_bg).stroke(egui::Stroke::new(1.0, tc.modal_stroke)).inner_margin(30.0).corner_radius(4.0));
-                    let has_payload = pending_payload.is_some();
-                    let label = if has_payload {
-                        let pitch_rad = f32::from_le_bytes([pending_payload.as_ref().unwrap()[0], pending_payload.as_ref().unwrap()[1], pending_payload.as_ref().unwrap()[2], pending_payload.as_ref().unwrap()[3]]);
-                        format!("Send {} (pitch={:.1}°)?", cmd, pitch_rad.to_degrees())
-                    } else {
-                        format!("Send {}?", cmd)
+                    let label = match (cmd, pending_payload.as_deref()) {
+                        (Command::Calibration, Some(p)) if p.len() == 4 => {
+                            let pitch_rad = f32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+                            format!("Send {} (pitch={:.1}°)?", cmd, pitch_rad.to_degrees())
+                        }
+                        (Command::DeepCalibration, Some(p)) if p.len() == 1 => {
+                            let face_names = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
+                            let name = face_names.get((p[0] - 1) as usize).unwrap_or(&"?");
+                            format!("Send {} (face {} {})?", cmd, p[0], name)
+                        }
+                        _ => format!("Send {}?", cmd),
                     };
                     let response = modal.show(ctx, |ui| {
                         ui.label(egui::RichText::new(label).size(18.0).family(egui::FontFamily::Name("Bold".into())));
@@ -663,9 +694,20 @@ impl GroundStationApp {
                         ui.horizontal(|ui| {
                             if ui.button(egui::RichText::new("CONFIRM").size(15.0)).clicked() {
                                 if let Some(payload) = pending_payload.take() {
-                                    let pitch_rad = f32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                                    let log_msg = match cmd {
+                                        Command::Calibration if payload.len() == 4 => {
+                                            let pitch_rad = f32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                                            format!("{} (pitch={:.1}°)", cmd, pitch_rad.to_degrees())
+                                        }
+                                        Command::DeepCalibration => {
+                                            let face_names = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
+                                            let name = face_names.get((payload[0] - 1) as usize).unwrap_or(&"?");
+                                            format!("{} (face {} {})", cmd, payload[0], name)
+                                        }
+                                        _ => format!("{}", cmd),
+                                    };
                                     let _ = cmd_tx.send(SerialCommand::SendCommandWithPayload(cmd, payload));
-                                    state.push_command(&format!("{} (pitch={:.1}°)", cmd, pitch_rad.to_degrees()));
+                                    state.push_command(&log_msg);
                                 } else {
                                     let _ = cmd_tx.send(SerialCommand::SendCommand(cmd));
                                     state.push_command(&format!("{}", cmd));
@@ -1338,7 +1380,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                             ("IIM42653", r.flags & 0x30),
                             ("IIS2MDCTR", r.flags & 0xC0),
                             ("SD", r.flags & 0x300),
-                            ("W25Q", r.flags & 0xC00),
+                            ("W25Q", r.flags & 0x1C00),
                         ];
                         for (name, bits) in fault_list {
                             let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
@@ -1463,7 +1505,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
             theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
                 if has_full {
-                    if let Some(t) = charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, v.chart_points, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, &v.baro_altitude_raw, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
