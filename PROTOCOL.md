@@ -66,6 +66,7 @@ Any agent that reads this file should not assume that any information is correct
 | 10  | W25Q_JEDEC_ID_FAILED              |
 | 11  | W25Q_INIT_FAILED                  |
 | 12  | W25Q_CAL_WRITE_FAILED             |
+| 13  | SIX_POINT_CAL_FAILED              |
 
 ### Deep Calibration (bits 16-21)
 
@@ -109,9 +110,16 @@ Present in Flags during STATE_DEEP_CALIBRATION. Zero otherwise.
 | BarometricAltitude | float  | Meters              |                  |
 | BarometricVelocity | float  | m/s                 |                  |
 | GPSVelocity        | float  | m/s                 |                  |
-| VelX               | float  | m/s                 |                  |
-| VelY               | float  | m/s                 |                  |
-| VelZ               | float  | m/s                 |                  |
+| VelX               | float  | m/s                 | Kalman NED       |
+| VelY               | float  | m/s                 | Kalman NED       |
+| VelZ               | float  | m/s                 | Kalman NED       |
+| PosX               | float  | m                   | Kalman NED       |
+| PosY               | float  | m                   | Kalman NED       |
+| PosZ               | float  | m                   | Kalman NED       |
+| QuatW              | float  |                     | Kalman scalar    |
+| QuatX              | float  |                     | Kalman vector    |
+| QuatY              | float  |                     | Kalman vector    |
+| QuatZ              | float  |                     | Kalman vector    |
 | BodyAccelX         | float  | m/s^2               |                  |
 | BodyAccelY         | float  | m/s^2               |                  |
 | BodyAccelZ         | float  | m/s^2               |                  |
@@ -268,14 +276,24 @@ Command `0x10` (COMMAND_HIL_DATA). Received over UART from external device (Lapt
 | 54     | 4    | int32   | Longitude      | x10^7                |
 | 58     | 4    | float32 | GPSAltitude    | Native               |
 | 62     | 4    | uint32  | UnixTime       | Epoch Seconds        |
-| 66     | 2    | uint16  | Milliseconds   | 0-999                |
-| 68     | 1    | uint8   | Satellites     | Raw                  |
-| 69     | 4    | uint32  | Flags          | Bitmask              |
-| 73     | 4    | float32 | BatteryVoltage | Native               |
-| 77     | 1    | uint8   | State          | Enum                 |
-| 78     | 1    | uint8   | RelayState     | Bitmask              |
-| 79     | 1    | uint8   | LastCommand    | Enum                 |
-| 80     | 1    | uint8   | SyncEnd        | `0xBE`               |
+| 66     | 1    | uint8   | Satellites     | Raw                  |
+| 67     | 4    | float32 | VelX           | Native, Kalman NED   |
+| 71     | 4    | float32 | VelY           | Native, Kalman NED   |
+| 75     | 4    | float32 | VelZ           | Native, Kalman NED   |
+| 79     | 4    | float32 | PosX           | Native, Kalman NED   |
+| 83     | 4    | float32 | PosY           | Native, Kalman NED   |
+| 87     | 4    | float32 | PosZ           | Native, Kalman NED   |
+| 91     | 4    | float32 | QuatW          | Native, scalar       |
+| 95     | 4    | float32 | QuatX          | Native, vector       |
+| 99     | 4    | float32 | QuatY          | Native, vector       |
+| 103    | 4    | float32 | QuatZ          | Native, vector       |
+| 107    | 4    | float32 | KalmanPZ       | P[2,2], pos-Z var    |
+| 111    | 4    | uint32  | Flags          | Bitmask              |
+| 115    | 4    | float32 | BatteryVoltage | Native               |
+| 119    | 1    | uint8   | State          | Enum                 |
+| 120    | 1    | uint8   | RelayState     | Bitmask              |
+| 121    | 1    | uint8   | LastCommand    | Enum                 |
+| 122    | 1    | uint8   | SyncEnd        | `0xBE`               |
 
 ## Wire Flash Log Record (Structure, Packed)
 

@@ -111,6 +111,13 @@ pub fn parse_csv_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsi
             unix_time,
             milliseconds,
             satellites: cols.u64(&row, "satellites") as u8,
+            vel: [cols.f64(&row, "vel_x"), cols.f64(&row, "vel_y"), cols.f64(&row, "vel_z")],
+            pos: [cols.f64(&row, "pos_x"), cols.f64(&row, "pos_y"), cols.f64(&row, "pos_z")],
+            quat: [
+                if cols.has("quat_w") { cols.f64(&row, "quat_w") } else { 1.0 },
+                cols.f64(&row, "quat_x"), cols.f64(&row, "quat_y"), cols.f64(&row, "quat_z"),
+            ],
+            kalman_pz: cols.f64(&row, "kalman_pz"),
             flags: cols.u64(&row, "flags") as u32,
             battery_voltage: cols.f64(&row, "battery_voltage"),
             state: FlightState::from_u8(cols.u64(&row, "state") as u8).unwrap_or(FlightState::Idle),

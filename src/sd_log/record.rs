@@ -1,6 +1,6 @@
 use crate::telemetry::packet::{Command, FlightState, PacketField, RelayState};
 
-pub const SD_RECORD_SIZE: usize = 81;
+pub const SD_RECORD_SIZE: usize = 123;
 pub const FLASH_RECORD_SIZE: usize = 32;
 pub const SD_SYNC_WORD: u16 = 0xCAFE;
 pub const SD_SYNC_END: u8 = 0xBE;
@@ -22,6 +22,10 @@ pub struct SdRecord {
     pub unix_time: u32,
     pub milliseconds: u16,
     pub satellites: u8,
+    pub vel: [f64; 3],
+    pub pos: [f64; 3],
+    pub quat: [f64; 4],
+    pub kalman_pz: f64,
     pub flags: u32,
     pub battery_voltage: f64,
     pub state: FlightState,
@@ -47,14 +51,24 @@ pub const SD_RECORD_FIELDS: &[PacketField] = &[
     PacketField { name: "LON",       offset: 54, length: 4, color: [80, 220, 200] },
     PacketField { name: "GPS ALT",   offset: 58, length: 4, color: [110, 240, 200] },
     PacketField { name: "UNIX TIME", offset: 62, length: 4, color: [180, 180, 255] },
-    PacketField { name: "MILLIS",    offset: 66, length: 2, color: [160, 160, 235] },
-    PacketField { name: "SATS",      offset: 68, length: 1, color: [140, 255, 200] },
-    PacketField { name: "FLAGS",     offset: 69, length: 4, color: [255, 80, 80] },
-    PacketField { name: "BATTERY",   offset: 73, length: 4, color: [255, 255, 0] },
-    PacketField { name: "STATE",     offset: 77, length: 1, color: [0, 200, 255] },
-    PacketField { name: "RELAY",     offset: 78, length: 1, color: [255, 165, 0] },
-    PacketField { name: "CMD",       offset: 79, length: 1, color: [180, 180, 255] },
-    PacketField { name: "SYNC END",  offset: 80, length: 1, color: [255, 255, 255] },
+    PacketField { name: "SATS",      offset: 66, length: 1, color: [140, 255, 200] },
+    PacketField { name: "VEL X",    offset: 67, length: 4, color: [255, 180, 180] },
+    PacketField { name: "VEL Y",    offset: 71, length: 4, color: [255, 200, 180] },
+    PacketField { name: "VEL Z",    offset: 75, length: 4, color: [255, 220, 180] },
+    PacketField { name: "POS X",    offset: 79, length: 4, color: [180, 255, 180] },
+    PacketField { name: "POS Y",    offset: 83, length: 4, color: [180, 255, 200] },
+    PacketField { name: "POS Z",    offset: 87, length: 4, color: [180, 255, 220] },
+    PacketField { name: "QUAT W",   offset: 91, length: 4, color: [180, 180, 255] },
+    PacketField { name: "QUAT X",   offset: 95, length: 4, color: [200, 180, 255] },
+    PacketField { name: "QUAT Y",   offset: 99, length: 4, color: [220, 180, 255] },
+    PacketField { name: "QUAT Z",   offset: 103, length: 4, color: [240, 180, 255] },
+    PacketField { name: "KALMAN PZ", offset: 107, length: 4, color: [120, 220, 240] },
+    PacketField { name: "FLAGS",     offset: 111, length: 4, color: [255, 80, 80] },
+    PacketField { name: "BATTERY",   offset: 115, length: 4, color: [255, 255, 0] },
+    PacketField { name: "STATE",     offset: 119, length: 1, color: [0, 200, 255] },
+    PacketField { name: "RELAY",     offset: 120, length: 1, color: [255, 165, 0] },
+    PacketField { name: "CMD",       offset: 121, length: 1, color: [180, 180, 255] },
+    PacketField { name: "SYNC END",  offset: 122, length: 1, color: [255, 255, 255] },
 ];
 
 pub const FLASH_RECORD_FIELDS: &[PacketField] = &[

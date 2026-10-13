@@ -1346,6 +1346,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                         theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", r.latitude), dm);
                         theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", r.longitude), dm);
                         theme::data_row(ui, "SATELLITES", &format!("{}", r.satellites), dm);
+                        theme::data_row(ui, "POS Z \u{03c3}", &format!("{:.2} m", r.kalman_pz.max(0.0).sqrt()), dm);
                     }
                 });
 
@@ -1529,6 +1530,49 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &v.timestamps, &v.gyro_x, &v.gyro_y, &v.gyro_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                     clicked_ts = Some(t);
                 }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "VELOCITY (NED)", tc.accent, dm, |ui| {
+                if v.has_kalman() {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_vel", "m/s", &v.timestamps, &v.vel_x, &v.vel_y, &v.vel_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "POSITION (NED)", tc.accent, dm, |ui| {
+                if v.has_kalman() {
+                    if let Some(t) = charts::triple_series_chart(ui, "sd_pos", "m", &v.timestamps, &v.pos_x, &v.pos_y, &v.pos_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "POS Z UNCERTAINTY (1\u{03c3})", tc.accent, dm, |ui| {
+                if v.has_kalman() {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_kalman_pz", "1\u{03c3}", "m", &v.timestamps, &v.kalman_pz_sigma, v.chart_points, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
+                if v.has_kalman() {
+                    let idx = v.selected_index;
+                    let qw = v.quat_w.get(idx).copied().unwrap_or(1.0);
+                    let qx = v.quat_x.get(idx).copied().unwrap_or(0.0);
+                    let qy = v.quat_y.get(idx).copied().unwrap_or(0.0);
+                    let qz = v.quat_z.get(idx).copied().unwrap_or(0.0);
+                    charts::quaternion_orientation_viewer(ui, qw, qx, qy, qz, dm);
+                } else { na_label(ui); }
+            });
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "QUATERNION", tc.accent, dm, |ui| {
+                if v.has_kalman() {
+                    if let Some(t) = charts::quad_series_chart(ui, "sd_quat", &v.timestamps, &v.quat_w, &v.quat_x, &v.quat_y, &v.quat_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
+                        clicked_ts = Some(t);
+                    }
+                } else { na_label(ui); }
             });
             ui.add_space(4.0);
             theme::bordered_section(ui, "MAGNETOMETER", tc.accent, dm, |ui| {

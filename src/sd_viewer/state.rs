@@ -127,6 +127,18 @@ pub struct SdViewerState {
     pub pressure: Vec<f64>,
     pub temperature: Vec<f64>,
     pub battery: Vec<f64>,
+    pub vel_x: Vec<f64>,
+    pub vel_y: Vec<f64>,
+    pub vel_z: Vec<f64>,
+    pub pos_x: Vec<f64>,
+    pub pos_y: Vec<f64>,
+    pub pos_z: Vec<f64>,
+    pub quat_w: Vec<f64>,
+    pub quat_x: Vec<f64>,
+    pub quat_y: Vec<f64>,
+    pub quat_z: Vec<f64>,
+    /// 1-sigma from the Kalman pos-Z variance P[2,2], in meters
+    pub kalman_pz_sigma: Vec<f64>,
     pub baro_altitude: Vec<f64>,
     pub baro_altitude_raw: Vec<f64>,
     pub baro_velocity: Vec<f64>,
@@ -177,6 +189,17 @@ impl SdViewerState {
             pressure: Vec::new(),
             temperature: Vec::new(),
             battery: Vec::new(),
+            vel_x: Vec::new(),
+            vel_y: Vec::new(),
+            vel_z: Vec::new(),
+            pos_x: Vec::new(),
+            pos_y: Vec::new(),
+            pos_z: Vec::new(),
+            quat_w: Vec::new(),
+            quat_x: Vec::new(),
+            quat_y: Vec::new(),
+            quat_z: Vec::new(),
+            kalman_pz_sigma: Vec::new(),
             baro_altitude: Vec::new(),
             baro_altitude_raw: Vec::new(),
             baro_velocity: Vec::new(),
@@ -427,6 +450,17 @@ impl SdViewerState {
         self.pressure.reserve(count);
         self.temperature.reserve(count);
         self.battery.reserve(count);
+        self.vel_x.reserve(count);
+        self.vel_y.reserve(count);
+        self.vel_z.reserve(count);
+        self.pos_x.reserve(count);
+        self.pos_y.reserve(count);
+        self.pos_z.reserve(count);
+        self.quat_w.reserve(count);
+        self.quat_x.reserve(count);
+        self.quat_y.reserve(count);
+        self.quat_z.reserve(count);
+        self.kalman_pz_sigma.reserve(count);
         self.baro_altitude.reserve(count);
         self.baro_altitude_raw.reserve(count);
         self.baro_velocity.reserve(count);
@@ -451,6 +485,17 @@ impl SdViewerState {
             self.mag_x.push(r.mag[0]);
             self.mag_y.push(r.mag[1]);
             self.mag_z.push(r.mag[2]);
+            self.vel_x.push(r.vel[0]);
+            self.vel_y.push(r.vel[1]);
+            self.vel_z.push(r.vel[2]);
+            self.pos_x.push(r.pos[0]);
+            self.pos_y.push(r.pos[1]);
+            self.pos_z.push(r.pos[2]);
+            self.quat_w.push(r.quat[0]);
+            self.quat_x.push(r.quat[1]);
+            self.quat_y.push(r.quat[2]);
+            self.quat_z.push(r.quat[3]);
+            self.kalman_pz_sigma.push(r.kalman_pz.max(0.0).sqrt());
             self.gps_altitude.push(r.gps_altitude);
             self.pressure.push(r.pressure_pa);
             self.temperature.push(r.temperature_c);
@@ -471,7 +516,7 @@ impl SdViewerState {
 
                 let vel = match (prev_alt, prev_tick) {
                     (Some(pa), Some(pt)) => {
-                        let dt = (r.tick.wrapping_sub(pt)) as f64 / 1000.0;
+                        let dt = (r.tick.wrapping_sub(pt)) as f64 / TICK_RATE_HZ;
                         if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
                     }
                     _ => 0.0,
@@ -688,6 +733,14 @@ impl SdViewerState {
         }
     }
 
+    pub fn has_kalman(&self) -> bool {
+        match self.data_source {
+            DataSource::SdLog => true,
+            DataSource::FlashLog => false,
+            DataSource::Csv => self.vel_x.iter().any(|&v| v != 0.0),
+        }
+    }
+
     pub fn has_raw(&self) -> bool {
         self.data_source != DataSource::Csv
     }
@@ -718,6 +771,17 @@ impl SdViewerState {
         self.pressure.clear();
         self.temperature.clear();
         self.battery.clear();
+        self.vel_x.clear();
+        self.vel_y.clear();
+        self.vel_z.clear();
+        self.pos_x.clear();
+        self.pos_y.clear();
+        self.pos_z.clear();
+        self.quat_w.clear();
+        self.quat_x.clear();
+        self.quat_y.clear();
+        self.quat_z.clear();
+        self.kalman_pz_sigma.clear();
         self.baro_altitude.clear();
         self.baro_altitude_raw.clear();
         self.baro_velocity.clear();
@@ -732,7 +796,7 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], baro_altitude: &[f64], b
     let mut file = std::fs::File::create(path).map_err(|e| format!("Failed to create file: {}", e))?;
     match source {
         DataSource::SdLog => {
-            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,baro_altitude,baro_velocity,flags,battery_voltage,state,relay,last_command")
+            writeln!(file, "tick,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,pressure_pa,temperature_c,latitude,longitude,gps_altitude,unix_time,milliseconds,satellites,vel_x,vel_y,vel_z,pos_x,pos_y,pos_z,quat_w,quat_x,quat_y,quat_z,kalman_pz,baro_altitude,baro_velocity,flags,battery_voltage,state,relay,last_command")
                 .map_err(|e| format!("Write error: {}", e))?;
         }
         DataSource::FlashLog | DataSource::Csv => {
@@ -751,7 +815,7 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], baro_altitude: &[f64], b
                 let relay_val = r.relay.drogue_fired as u8 | ((r.relay.parachute_fired as u8) << 1);
                 writeln!(
                     file,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     r.tick,
                     r.accel[0], r.accel[1], r.accel[2],
                     r.gyro[0], r.gyro[1], r.gyro[2],
@@ -764,6 +828,10 @@ fn export_csv_to_file(path: &str, records: &[SdRecord], baro_altitude: &[f64], b
                     r.unix_time,
                     r.milliseconds,
                     r.satellites,
+                    r.vel[0], r.vel[1], r.vel[2],
+                    r.pos[0], r.pos[1], r.pos[2],
+                    r.quat[0], r.quat[1], r.quat[2], r.quat[3],
+                    r.kalman_pz,
                     baro_altitude.get(i).copied().unwrap_or(0.0),
                     baro_velocity.get(i).copied().unwrap_or(0.0),
                     r.flags,

@@ -85,8 +85,11 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
     let longitude = r.gps_scaled();
     let gps_altitude = r.f32_le();
     let unix_time = r.u32_le();
-    let milliseconds = r.u16_le();
     let satellites = r.u8();
+    let vel = [r.f32_le(), r.f32_le(), r.f32_le()];
+    let pos = [r.f32_le(), r.f32_le(), r.f32_le()];
+    let quat = [r.f32_le(), r.f32_le(), r.f32_le(), r.f32_le()];
+    let kalman_pz = r.f32_le();
     let flags = r.u32_le();
     let battery_voltage = r.f32_le();
     let state = FlightState::from_u8(r.u8())?;
@@ -105,8 +108,13 @@ pub fn parse_sd_record(buf: &[u8; SD_RECORD_SIZE]) -> Option<SdRecord> {
         longitude,
         gps_altitude,
         unix_time,
-        milliseconds,
+        // not carried by the SD wire record; CSV sources still populate it
+        milliseconds: 0,
         satellites,
+        vel,
+        pos,
+        quat,
+        kalman_pz,
         flags,
         battery_voltage,
         state,
@@ -145,6 +153,10 @@ pub fn parse_flash_record(buf: &[u8; FLASH_RECORD_SIZE]) -> Option<SdRecord> {
         unix_time: 0,
         milliseconds: 0,
         satellites: 0,
+        vel: [0.0; 3],
+        pos: [0.0; 3],
+        quat: [1.0, 0.0, 0.0, 0.0],
+        kalman_pz: 0.0,
         flags: 0,
         battery_voltage: 0.0,
         state,
@@ -234,9 +246,13 @@ mod tests {
         buf[2..6].copy_from_slice(&500u32.to_le_bytes()); // tick
         // accel_x = 9.81 as f32
         buf[6..10].copy_from_slice(&9.81f32.to_le_bytes());
-        buf[77] = 0; // state = Idle
-        buf[78] = 0; // relay
-        buf[79] = 0; // command
+        buf[62..66].copy_from_slice(&1_700_000_000u32.to_le_bytes()); // unix_time
+        buf[66] = 9; // satellites
+        buf[91..95].copy_from_slice(&0.5f32.to_le_bytes()); // quat w
+        buf[107..111].copy_from_slice(&2.25f32.to_le_bytes()); // kalman pz
+        buf[119] = 0; // state = Idle
+        buf[120] = 0; // relay
+        buf[121] = 0; // command
         buf[SD_RECORD_SIZE - 1] = SD_SYNC_END;
         buf
     }
@@ -248,6 +264,11 @@ mod tests {
         assert_eq!(r.tick, 500);
         assert!((r.accel[0] - 9.81).abs() < 0.001);
         assert_eq!(r.state, FlightState::Idle);
+        // pins the post-Milliseconds-removal layout: a shifted offset breaks these
+        assert_eq!(r.unix_time, 1_700_000_000);
+        assert_eq!(r.satellites, 9);
+        assert!((r.quat[0] - 0.5).abs() < 0.001);
+        assert!((r.kalman_pz - 2.25).abs() < 0.001);
     }
 
     #[test]
