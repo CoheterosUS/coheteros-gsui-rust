@@ -316,7 +316,9 @@ impl SdViewerState {
         // Prefer the baro values stored in the CSV (firmware or previous export) over recomputing.
         if log.layout.baro {
             self.baro_altitude = log.baro_altitude;
-            self.baro_velocity = log.baro_velocity;
+            if log.layout.baro_vel {
+                self.baro_velocity = log.baro_velocity;
+            }
         }
     }
 
@@ -722,6 +724,14 @@ impl SdViewerState {
             DataSource::SdLog => true,
             DataSource::FlashLog => false,
             DataSource::Csv => self.csv_layout.mag,
+        }
+    }
+
+    pub fn has_pressure(&self) -> bool {
+        match self.data_source {
+            DataSource::SdLog => true,
+            DataSource::FlashLog => false,
+            DataSource::Csv => self.csv_layout.pressure,
         }
     }
 

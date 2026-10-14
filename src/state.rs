@@ -10,7 +10,9 @@ pub struct AppState {
     pub latest: Option<Telemetry>,
     pub baro_altitude: VecDeque<f64>,
     pub gps_altitude: VecDeque<f64>,
-    pub baro_velocity: VecDeque<f64>,
+    pub pos_z: VecDeque<f64>,
+    pub vel_z: VecDeque<f64>,
+    pub kalman_pz: VecDeque<f64>,
     pub accel_x: VecDeque<f64>,
     pub accel_y: VecDeque<f64>,
     pub accel_z: VecDeque<f64>,
@@ -36,10 +38,8 @@ pub struct AppState {
     pub lock_gps: bool,
     pub max_baro_altitude: f64,
     pub max_gps_altitude: f64,
-    pub max_baro_velocity: f64,
+    pub max_vert_velocity: f64,
     pub max_accel_magnitude: f64,
-    pub max_temperature: f64,
-    pub min_temperature: f64,
     pub min_battery_voltage: f64,
     pub max_battery_voltage: f64,
     pub extremes_initialized: bool,
@@ -60,7 +60,9 @@ impl AppState {
             latest: None,
             baro_altitude: VecDeque::with_capacity(MAX_DATA_POINTS),
             gps_altitude: VecDeque::with_capacity(MAX_DATA_POINTS),
-            baro_velocity: VecDeque::with_capacity(MAX_DATA_POINTS),
+            pos_z: VecDeque::with_capacity(MAX_DATA_POINTS),
+            vel_z: VecDeque::with_capacity(MAX_DATA_POINTS),
+            kalman_pz: VecDeque::with_capacity(MAX_DATA_POINTS),
             accel_x: VecDeque::with_capacity(MAX_DATA_POINTS),
             accel_y: VecDeque::with_capacity(MAX_DATA_POINTS),
             accel_z: VecDeque::with_capacity(MAX_DATA_POINTS),
@@ -86,10 +88,8 @@ impl AppState {
             lock_gps: true,
             max_baro_altitude: f64::NEG_INFINITY,
             max_gps_altitude: f64::NEG_INFINITY,
-            max_baro_velocity: f64::NEG_INFINITY,
+            max_vert_velocity: f64::NEG_INFINITY,
             max_accel_magnitude: 0.0,
-            max_temperature: f64::NEG_INFINITY,
-            min_temperature: f64::INFINITY,
             min_battery_voltage: f64::INFINITY,
             max_battery_voltage: f64::NEG_INFINITY,
             extremes_initialized: false,
@@ -109,7 +109,9 @@ impl AppState {
 
         push_bounded(&mut self.baro_altitude, t.baro_altitude);
         push_bounded(&mut self.gps_altitude, t.gps_altitude);
-        push_bounded(&mut self.baro_velocity, t.baro_velocity);
+        push_bounded(&mut self.pos_z, t.pos_z);
+        push_bounded(&mut self.vel_z, t.vel_z);
+        push_bounded(&mut self.kalman_pz, t.kalman_pz.max(0.0).sqrt());
         push_bounded(&mut self.accel_x, t.accel[0]);
         push_bounded(&mut self.accel_y, t.accel[1]);
         push_bounded(&mut self.accel_z, t.accel[2]);
@@ -138,20 +140,16 @@ impl AppState {
         if !self.extremes_initialized {
             self.max_baro_altitude = t.baro_altitude;
             self.max_gps_altitude = t.gps_altitude;
-            self.max_baro_velocity = t.baro_velocity;
+            self.max_vert_velocity = -t.vel_z;
             self.max_accel_magnitude = accel_mag;
-            self.max_temperature = t.temperature_c;
-            self.min_temperature = t.temperature_c;
             self.min_battery_voltage = t.battery_voltage;
             self.max_battery_voltage = t.battery_voltage;
             self.extremes_initialized = true;
         } else {
             self.max_baro_altitude = self.max_baro_altitude.max(t.baro_altitude);
             self.max_gps_altitude = self.max_gps_altitude.max(t.gps_altitude);
-            self.max_baro_velocity = self.max_baro_velocity.max(t.baro_velocity);
+            self.max_vert_velocity = self.max_vert_velocity.max(-t.vel_z);
             self.max_accel_magnitude = self.max_accel_magnitude.max(accel_mag);
-            self.max_temperature = self.max_temperature.max(t.temperature_c);
-            self.min_temperature = self.min_temperature.min(t.temperature_c);
             self.min_battery_voltage = self.min_battery_voltage.min(t.battery_voltage);
             self.max_battery_voltage = self.max_battery_voltage.max(t.battery_voltage);
         }
@@ -179,7 +177,9 @@ impl AppState {
         self.latest = None;
         self.baro_altitude.clear();
         self.gps_altitude.clear();
-        self.baro_velocity.clear();
+        self.pos_z.clear();
+        self.vel_z.clear();
+        self.kalman_pz.clear();
         self.accel_x.clear();
         self.accel_y.clear();
         self.accel_z.clear();
@@ -196,10 +196,8 @@ impl AppState {
         self.throughput_last_update = Instant::now();
         self.max_baro_altitude = f64::NEG_INFINITY;
         self.max_gps_altitude = f64::NEG_INFINITY;
-        self.max_baro_velocity = f64::NEG_INFINITY;
+        self.max_vert_velocity = f64::NEG_INFINITY;
         self.max_accel_magnitude = 0.0;
-        self.max_temperature = f64::NEG_INFINITY;
-        self.min_temperature = f64::INFINITY;
         self.min_battery_voltage = f64::INFINITY;
         self.max_battery_voltage = f64::NEG_INFINITY;
         self.extremes_initialized = false;

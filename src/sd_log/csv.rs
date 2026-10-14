@@ -8,13 +8,17 @@ use super::record::SdRecord;
 /// Which optional column groups were present in the loaded CSV.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CsvLayout {
-    /// Pressure/GPS/battery/relay columns present (telemetry or SD export, not flash export).
+    /// GPS/battery/relay columns present (telemetry or SD export, not flash export).
     pub full: bool,
     pub mag: bool,
     /// `unix_time` or `ground_timestamp` present.
     pub time: bool,
-    /// Pre-computed `baro_altitude` / `baro_velocity` present.
+    /// Pre-computed `baro_altitude` present.
     pub baro: bool,
+    /// Pre-computed `baro_velocity` present.
+    pub baro_vel: bool,
+    /// `pressure_pa` / `temperature_c` present.
+    pub pressure: bool,
 }
 
 pub struct CsvLog {
@@ -65,10 +69,12 @@ pub fn parse_csv_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsi
     }
 
     let layout = CsvLayout {
-        full: cols.has("pressure_pa"),
+        full: cols.has("latitude"),
         mag: cols.has("mag_x"),
         time: cols.has("unix_time") || cols.has("ground_timestamp"),
-        baro: cols.has("baro_altitude") && cols.has("baro_velocity"),
+        baro: cols.has("baro_altitude"),
+        baro_vel: cols.has("baro_velocity"),
+        pressure: cols.has("pressure_pa"),
     };
 
     let mut records = Vec::new();
@@ -158,7 +164,7 @@ mod tests {
         assert!(r.relay.drogue_fired && !r.relay.parachute_fired);
         assert_eq!(r.last_command, Command::Calibration);
         assert_eq!(log.baro_altitude, vec![12.5]);
-        assert_eq!(log.layout, CsvLayout { full: true, mag: false, time: true, baro: true });
+        assert_eq!(log.layout, CsvLayout { full: true, mag: false, time: true, baro: true, baro_vel: true, pressure: true });
     }
 
     #[test]

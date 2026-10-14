@@ -88,13 +88,35 @@ pub fn gyroscope_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn velocity_chart(ui: &mut egui::Ui, state: &AppState) {
-    let v: PlotPoints = state.baro_velocity.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("velocity_plot")
+pub fn pos_z_chart(ui: &mut egui::Ui, state: &AppState) {
+    let pts: PlotPoints = state.pos_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
+    telemetry_plot("pos_z_plot")
         .label_formatter(multi_series_formatter(vec![
-            ("Vertical", &state.baro_velocity, "m/s"),
+            ("Pos Z", &state.pos_z, "m"),
         ]))
         .show(ui, |plot_ui| {
-            plot_ui.line(Line::new("Vertical", v));
+            plot_ui.line(Line::new("Pos Z", pts));
+        });
+}
+
+pub fn vel_z_chart(ui: &mut egui::Ui, state: &AppState) {
+    let pts: PlotPoints = state.vel_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
+    telemetry_plot("vel_z_plot")
+        .label_formatter(multi_series_formatter(vec![
+            ("Vel Z", &state.vel_z, "m/s"),
+        ]))
+        .show(ui, |plot_ui| {
+            plot_ui.line(Line::new("Vel Z", pts));
+        });
+}
+
+pub fn kalman_pz_chart(ui: &mut egui::Ui, state: &AppState) {
+    let pts: PlotPoints = state.kalman_pz.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
+    telemetry_plot("kalman_pz_plot")
+        .label_formatter(multi_series_formatter(vec![
+            ("1\u{03c3}", &state.kalman_pz, "m"),
+        ]))
+        .show(ui, |plot_ui| {
+            plot_ui.line(Line::new("1\u{03c3}", pts));
         });
 }

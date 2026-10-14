@@ -230,30 +230,34 @@ Command `0x10` (COMMAND_HIL_DATA). Received over UART from external device (Lapt
 
 ## Wire Telemetry Packet (Structure, Packed)
 
-| Offset | Size | Type   | Field              | Encoding          |
-|--------|------|--------|--------------------|-------------------|
-| 0      | 2    | uint16 | Sync               | `0xCAFE`          |
-| 2      | 4    | uint32 | Tick               | Raw               |
-| 6      | 2    | int16  | AccelX             | Truncated         |
-| 8      | 2    | int16  | AccelY             | Truncated         |
-| 10     | 2    | int16  | AccelZ             | Truncated         |
-| 12     | 2    | int16  | GyroX              | Truncated         |
-| 14     | 2    | int16  | GyroY              | Truncated         |
-| 16     | 2    | int16  | GyroZ              | Truncated         |
-| 18     | 2    | int16  | PressurePa         | /10               |
-| 20     | 1    | int8   | TemperatureC       | Truncated         |
-| 21     | 4    | int32  | Latitude           | x10^7             |
-| 25     | 4    | int32  | Longitude          | x10^7             |
-| 29     | 4    | int32  | GPSAltitude        | x100              |
-| 33     | 1    | uint8  | Satellites         | Raw               |
-| 34     | 4    | int32  | BarometricAltitude | x100              |
-| 38     | 4    | int32  | BarometricVelocity | x100              |
-| 42     | 4    | uint32 | Flags              | Bitmask           |
-| 46     | 2    | int16  | BatteryVoltage     | x10               |
-| 48     | 1    | uint8  | State              | Enum              |
-| 49     | 1    | uint8  | RelayState         | Bitmask           |
-| 50     | 1    | uint8  | LastCommand        | Enum              |
-| 51     | 1    | uint8  | SyncEnd            | `0xBE`            |
+| Offset | Size | Type    | Field              | Encoding          |
+|--------|------|---------|--------------------|-------------------|
+| 0      | 2    | uint16  | Sync               | `0xCAFE`          |
+| 2      | 4    | uint32  | Tick               | Raw               |
+| 6      | 2    | int16   | AccelX             | Truncated         |
+| 8      | 2    | int16   | AccelY             | Truncated         |
+| 10     | 2    | int16   | AccelZ             | Truncated         |
+| 12     | 2    | int16   | GyroX              | Truncated         |
+| 14     | 2    | int16   | GyroY              | Truncated         |
+| 16     | 2    | int16   | GyroZ              | Truncated         |
+| 18     | 4    | int32   | Latitude           | x10^7             |
+| 22     | 4    | int32   | Longitude          | x10^7             |
+| 26     | 2    | int16   | GPSAltitude        | x100              |
+| 28     | 1    | uint8   | Satellites         | Raw               |
+| 29     | 2    | int16   | BarometricAltitude | x100              |
+| 31     | 2    | int16   | PosZ               | x1, Kalman NED    |
+| 33     | 2    | int16   | VelZ               | x100, Kalman NED  |
+| 35     | 1    | int8    | QuatW              | x100              |
+| 36     | 1    | int8    | QuatX              | x100              |
+| 37     | 1    | int8    | QuatY              | x100              |
+| 38     | 1    | int8    | QuatZ              | x100              |
+| 39     | 4    | float32 | KalmanPZ           | P[2,2], pos-Z var |
+| 43     | 4    | uint32  | Flags              | Bitmask           |
+| 47     | 1    | uint8   | BatteryVoltage     | x10               |
+| 48     | 1    | uint8   | State              | Enum              |
+| 49     | 1    | uint8   | RelayState         | Bitmask           |
+| 50     | 1    | uint8   | LastCommand        | Enum              |
+| 51     | 1    | uint8   | SyncEnd            | `0xBE`            |
 
 ## Wire SD Log Record (Structure, Packed)
 

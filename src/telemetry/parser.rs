@@ -56,8 +56,19 @@ impl<'a> PacketReader<'a> {
         v
     }
 
-    fn scaled(&mut self) -> f64 {
-        self.i32_le() as f64 / SCALE
+    fn f32_le(&mut self) -> f64 {
+        let v = f32::from_le_bytes([
+            self.buf[self.pos],
+            self.buf[self.pos + 1],
+            self.buf[self.pos + 2],
+            self.buf[self.pos + 3],
+        ]);
+        self.pos += 4;
+        v as f64
+    }
+
+    fn i16_scaled(&mut self) -> f64 {
+        self.i16_le() as f64 / SCALE
     }
 
     fn gps_scaled(&mut self) -> f64 {
@@ -79,16 +90,22 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
     let tick = r.u32_le();
     let accel = [r.i16_le() as f64, r.i16_le() as f64, r.i16_le() as f64];
     let gyro = [r.i16_le() as f64, r.i16_le() as f64, r.i16_le() as f64];
-    let pressure_pa = r.i16_le() as f64 * PRESSURE_SCALE;
-    let temperature_c = r.i8() as f64;
     let latitude = r.gps_scaled();
     let longitude = r.gps_scaled();
-    let gps_altitude = r.scaled();
+    let gps_altitude = r.i16_scaled();
     let satellites = r.u8();
-    let baro_altitude = r.scaled();
-    let baro_velocity = r.scaled();
+    let baro_altitude = r.i16_scaled();
+    let pos_z = r.i16_le() as f64;
+    let vel_z = r.i16_scaled();
+    let quat = [
+        r.i8() as f64 / SCALE,
+        r.i8() as f64 / SCALE,
+        r.i8() as f64 / SCALE,
+        r.i8() as f64 / SCALE,
+    ];
+    let kalman_pz = r.f32_le();
     let flags = r.u32_le();
-    let battery_voltage = r.i16_le() as f64 / BATTERY_SCALE;
+    let battery_voltage = r.u8() as f64 / BATTERY_SCALE;
     let state = FlightState::from_u8(r.u8())?;
     let relay = RelayState::from_u8(r.u8());
     let last_command = Command::from_u8(r.u8()).unwrap_or(Command::None);
@@ -98,14 +115,15 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
         tick,
         accel,
         gyro,
-        pressure_pa,
-        temperature_c,
         latitude,
         longitude,
         gps_altitude,
         satellites,
         baro_altitude,
-        baro_velocity,
+        pos_z,
+        vel_z,
+        quat,
+        kalman_pz,
         flags,
         battery_voltage,
         state,
@@ -171,6 +189,12 @@ mod tests {
         buf[1] = 0xCA;
         buf[2..6].copy_from_slice(&1000u32.to_le_bytes());
         buf[6..8].copy_from_slice(&9i16.to_le_bytes());
+        buf[28] = 7; // satellites
+        buf[31..33].copy_from_slice(&250i16.to_le_bytes()); // pos_z, x1
+        buf[33..35].copy_from_slice(&(-1250i16).to_le_bytes()); // vel_z, x100
+        buf[35] = 100; // quat w, x100
+        buf[39..43].copy_from_slice(&2.25f32.to_le_bytes()); // kalman_pz
+        buf[47] = 123; // battery, x10
         buf[48] = 0;
         buf[49] = 0;
         buf[50] = 0;
@@ -185,6 +209,13 @@ mod tests {
         assert_eq!(t.tick, 1000);
         assert!((t.accel[0] - 9.0).abs() < 0.01);
         assert_eq!(t.state, FlightState::Idle);
+        // pins the reshuffled wire layout: a shifted offset or wrong scale breaks these
+        assert_eq!(t.satellites, 7);
+        assert!((t.pos_z - 250.0).abs() < 0.01);
+        assert!((t.vel_z + 12.5).abs() < 0.01);
+        assert!((t.quat[0] - 1.0).abs() < 0.01);
+        assert!((t.kalman_pz - 2.25).abs() < 0.001);
+        assert!((t.battery_voltage - 12.3).abs() < 0.01);
     }
 
     #[test]

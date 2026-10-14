@@ -124,11 +124,8 @@ impl GroundStationApp {
                     ui.label("BATTERY");
                     ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(tc.yellow));
                     ui.separator();
-                    ui.label("PRESSURE");
-                    ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).family(egui::FontFamily::Name("Bold".into())));
-                    ui.separator();
-                    ui.label("TEMP");
-                    ui.label(egui::RichText::new(format!("{:.2} °C", t.temperature_c)).family(egui::FontFamily::Name("Bold".into())).color(egui::Color32::from_rgb(230, 70, 70)));
+                    ui.label("POS Z \u{03c3}");
+                    ui.label(egui::RichText::new(format!("{:.2} m", t.kalman_pz.max(0.0).sqrt())).family(egui::FontFamily::Name("Bold".into())));
                 }
             });
         });
@@ -201,7 +198,8 @@ impl GroundStationApp {
                     theme::bordered_section(&mut cols[1], "ALTITUDE", tc.accent, dm, |ui| {
                         if let Some(ref t) = t {
                             theme::data_row(ui, "BARO ALT (AGL)", &format!("{:.2} m", t.baro_altitude), dm);
-                            theme::data_row(ui, "BARO VELOCITY", &format!("{:.2} m/s", t.baro_velocity), dm);
+                            theme::data_row(ui, "POS Z (KALMAN)", &format!("{:.2} m", -t.pos_z), dm);
+                            theme::data_row(ui, "VERT VELOCITY", &format!("{:.2} m/s", -t.vel_z), dm);
                         }
                     });
 
@@ -271,11 +269,9 @@ impl GroundStationApp {
                         ui.columns(4, |cols| {
                             theme::data_row(&mut cols[0], "PEAK BARO ALT", &format!("{:.1} m", self.state.max_baro_altitude), dm);
                             theme::data_row(&mut cols[0], "PEAK GPS ALT", &format!("{:.1} m", self.state.max_gps_altitude), dm);
-                            theme::data_row(&mut cols[1], "MAX BARO VEL", &format!("{:.1} m/s", self.state.max_baro_velocity), dm);
+                            theme::data_row(&mut cols[1], "MAX VERT VEL", &format!("{:.1} m/s", self.state.max_vert_velocity), dm);
                             theme::data_row(&mut cols[1], "MAX ACCEL", &format!("{:.1} m/s\u{00b2}", self.state.max_accel_magnitude), dm);
                             theme::data_row(&mut cols[2], "MAX G-FORCE", &format!("{:.1} G", self.state.max_accel_magnitude / 9.81), dm);
-                            theme::data_row(&mut cols[2], "MAX TEMP", &format!("{:.1} \u{00b0}C", self.state.max_temperature), dm);
-                            theme::data_row(&mut cols[3], "MIN TEMP", &format!("{:.1} \u{00b0}C", self.state.min_temperature), dm);
                             theme::data_row(&mut cols[3], "BATTERY", &format!("{:.2} - {:.2} V", self.state.min_battery_voltage, self.state.max_battery_voltage), dm);
                         });
                     });
@@ -296,8 +292,26 @@ impl GroundStationApp {
                     ui::charts::gyroscope_chart(ui, &self.state);
                 });
                 ui.add_space(4.0);
-                theme::bordered_section(ui, "VELOCITY", tc.accent, dm, |ui| {
-                    ui::charts::velocity_chart(ui, &self.state);
+                theme::bordered_section(ui, "POS Z (KALMAN)", tc.accent, dm, |ui| {
+                    ui::charts::pos_z_chart(ui, &self.state);
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "VEL Z (KALMAN)", tc.accent, dm, |ui| {
+                    ui::charts::vel_z_chart(ui, &self.state);
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "POS Z UNCERTAINTY (1\u{03c3})", tc.accent, dm, |ui| {
+                    ui::charts::kalman_pz_chart(ui, &self.state);
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
+                    if let Some(ref t) = t {
+                        crate::sd_viewer::charts::quaternion_orientation_viewer(
+                            ui, t.quat[0], t.quat[1], t.quat[2], t.quat[3], dm,
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
+                    }
                 });
 
                 ui.add_space(4.0);
@@ -833,19 +847,23 @@ impl eframe::App for GroundStationApp {
                 let gy = 10.0 * (t_frac * 23.0).cos();
                 let gz = 5.0 * (t_frac * 37.0).sin();
                 let drift = t_frac * 0.002;
+                // nose starts vertical and tips over through the flight
+                let half_pitch = (90.0 - 70.0 * t_frac).to_radians() / 2.0;
                 self.state.push_telemetry(packet::Telemetry {
                     raw: [0u8; packet::PACKET_SIZE],
                     tick: (i as u32) * 100,
                     accel: [ax, ay, az],
                     gyro: [gx, gy, gz],
-                    pressure_pa: 101325.0 - alt * 12.0,
-                    temperature_c: 27.0 - alt * 0.0065,
                     latitude: base_lat + drift,
                     longitude: base_lon + drift * 0.7,
                     gps_altitude: alt + 2.0 * (t_frac * 41.0).sin(),
                     satellites: 12,
                     baro_altitude: alt,
-                    baro_velocity: vel,
+                    // NED: down-positive, so climb and altitude invert
+                    pos_z: -alt,
+                    vel_z: -vel,
+                    quat: [half_pitch.cos(), 0.0, half_pitch.sin(), 0.0],
+                    kalman_pz: 0.5 + t_frac * 3.0,
                     flags: 0,
                     battery_voltage: 4.05 - t_frac * 0.25,
                     state,
@@ -1584,7 +1602,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             });
             ui.add_space(4.0);
             theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
-                if has_full {
+                if v.has_pressure() {
                     if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &v.timestamps, &v.pressure, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
@@ -1592,7 +1610,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             });
             ui.add_space(4.0);
             theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
-                if has_full {
+                if v.has_pressure() {
                     if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &v.timestamps, &v.temperature, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
