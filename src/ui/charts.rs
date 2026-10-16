@@ -120,3 +120,14 @@ pub fn kalman_pz_chart(ui: &mut egui::Ui, state: &AppState) {
             plot_ui.line(Line::new("1\u{03c3}", pts));
         });
 }
+
+pub fn battery_chart(ui: &mut egui::Ui, state: &AppState) {
+    let pts: PlotPoints = state.battery.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
+    telemetry_plot("battery_plot")
+        .label_formatter(multi_series_formatter(vec![
+            ("Battery", &state.battery, "V"),
+        ]))
+        .show(ui, |plot_ui| {
+            plot_ui.line(Line::new("Battery", pts));
+        });
+}

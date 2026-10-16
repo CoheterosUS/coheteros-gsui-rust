@@ -51,6 +51,8 @@ Any agent that reads this file should not assume that any information is correct
 
 ## SystemFaultFlags (Bitmask)
 
+Each bit is set (1) when that fault occurs. Bits default to 0 (no fault).
+
 | Bit | Flag                              |
 |-----|-----------------------------------|
 | 0   | BMP280_MODE_IDLE_FAILED           |
@@ -126,7 +128,7 @@ Present in Flags during STATE_DEEP_CALIBRATION. Zero otherwise.
 | BodyGyroX          | float  | Degrees/s           |                  |
 | BodyGyroY          | float  | Degrees/s           |                  |
 | BodyGyroZ          | float  | Degrees/s           |                  |
-| Flags              | uint32 | Bitmask             | Bits 0-12: SystemFaultFlags, Bits 16-21: Deep Calibration |
+| Flags              | uint32 | Bitmask             | Bits 0-13: SystemFaultFlags, Bits 16-21: Deep Calibration |
 | BatteryVoltage     | float  | Volts               |                  |
 | State              | uint8  | SystemState         |                  |
 | RelayState         | uint8  | Bitmask             | RelayState       |
@@ -234,19 +236,19 @@ Command `0x10` (COMMAND_HIL_DATA). Received over UART from external device (Lapt
 |--------|------|---------|--------------------|-------------------|
 | 0      | 2    | uint16  | Sync               | `0xCAFE`          |
 | 2      | 4    | uint32  | Tick               | Raw               |
-| 6      | 2    | int16   | AccelX             | Truncated         |
-| 8      | 2    | int16   | AccelY             | Truncated         |
-| 10     | 2    | int16   | AccelZ             | Truncated         |
-| 12     | 2    | int16   | GyroX              | Truncated         |
-| 14     | 2    | int16   | GyroY              | Truncated         |
-| 16     | 2    | int16   | GyroZ              | Truncated         |
+| 6      | 2    | int16   | BodyAccelX         | x100              |
+| 8      | 2    | int16   | BodyAccelY         | x100              |
+| 10     | 2    | int16   | BodyAccelZ         | x100              |
+| 12     | 2    | int16   | BodyGyroX          | x10               |
+| 14     | 2    | int16   | BodyGyroY          | x10               |
+| 16     | 2    | int16   | BodyGyroZ          | x10               |
 | 18     | 4    | int32   | Latitude           | x10^7             |
 | 22     | 4    | int32   | Longitude          | x10^7             |
-| 26     | 2    | int16   | GPSAltitude        | x100              |
+| 26     | 2    | int16   | GPSAltitude        | x1                |
 | 28     | 1    | uint8   | Satellites         | Raw               |
-| 29     | 2    | int16   | BarometricAltitude | x100              |
+| 29     | 2    | int16   | BarometricAltitude | x1                |
 | 31     | 2    | int16   | PosZ               | x1, Kalman NED    |
-| 33     | 2    | int16   | VelZ               | x100, Kalman NED  |
+| 33     | 2    | int16   | VelZ               | x10, Kalman NED   |
 | 35     | 1    | int8    | QuatW              | x100              |
 | 36     | 1    | int8    | QuatX              | x100              |
 | 37     | 1    | int8    | QuatY              | x100              |

@@ -67,10 +67,6 @@ impl<'a> PacketReader<'a> {
         v as f64
     }
 
-    fn i16_scaled(&mut self) -> f64 {
-        self.i16_le() as f64 / SCALE
-    }
-
     fn gps_scaled(&mut self) -> f64 {
         self.i32_le() as f64 / GPS_SCALE
     }
@@ -88,15 +84,15 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
     }
 
     let tick = r.u32_le();
-    let accel = [r.i16_le() as f64, r.i16_le() as f64, r.i16_le() as f64];
-    let gyro = [r.i16_le() as f64, r.i16_le() as f64, r.i16_le() as f64];
+    let accel = [r.i16_le() as f64 / 100.0, r.i16_le() as f64 / 100.0, r.i16_le() as f64 / 100.0];
+    let gyro = [r.i16_le() as f64 / 10.0, r.i16_le() as f64 / 10.0, r.i16_le() as f64 / 10.0];
     let latitude = r.gps_scaled();
     let longitude = r.gps_scaled();
-    let gps_altitude = r.i16_scaled();
+    let gps_altitude = r.i16_le() as f64;
     let satellites = r.u8();
-    let baro_altitude = r.i16_scaled();
+    let baro_altitude = r.i16_le() as f64;
     let pos_z = r.i16_le() as f64;
-    let vel_z = r.i16_scaled();
+    let vel_z = r.i16_le() as f64 / 10.0;
     let quat = [
         r.i8() as f64 / SCALE,
         r.i8() as f64 / SCALE,

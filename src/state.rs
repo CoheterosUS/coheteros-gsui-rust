@@ -19,6 +19,7 @@ pub struct AppState {
     pub gyro_x: VecDeque<f64>,
     pub gyro_y: VecDeque<f64>,
     pub gyro_z: VecDeque<f64>,
+    pub battery: VecDeque<f64>,
     pub gps_trail: VecDeque<(f64, f64)>,
     pub packet_count: u64,
     pub bytes_received: u64,
@@ -46,6 +47,7 @@ pub struct AppState {
     pub console: VecDeque<ConsoleEntry>,
     last_flight_state: Option<FlightState>,
     session_start: Instant,
+    pub launch_site: Option<(f64, f64)>,
 }
 
 pub enum ConsoleEntry {
@@ -69,6 +71,7 @@ impl AppState {
             gyro_x: VecDeque::with_capacity(MAX_DATA_POINTS),
             gyro_y: VecDeque::with_capacity(MAX_DATA_POINTS),
             gyro_z: VecDeque::with_capacity(MAX_DATA_POINTS),
+            battery: VecDeque::with_capacity(MAX_DATA_POINTS),
             gps_trail: VecDeque::with_capacity(MAX_DATA_POINTS),
             packet_count: 0,
             bytes_received: 0,
@@ -82,7 +85,7 @@ impl AppState {
             selected_port: String::new(),
             selected_baud: 115200,
             ground_pos: None,
-            poll_interval_ms: 1000,
+            poll_interval_ms: 500,
             polling_active: false,
             dark_mode: true,
             lock_gps: true,
@@ -96,6 +99,7 @@ impl AppState {
             console: VecDeque::with_capacity(MAX_CONSOLE_ENTRIES),
             last_flight_state: None,
             session_start: Instant::now(),
+            launch_site: None,
         }
     }
 
@@ -118,6 +122,7 @@ impl AppState {
         push_bounded(&mut self.gyro_x, t.gyro[0]);
         push_bounded(&mut self.gyro_y, t.gyro[1]);
         push_bounded(&mut self.gyro_z, t.gyro[2]);
+        push_bounded(&mut self.battery, t.battery_voltage);
         if t.latitude != 0.0 || t.longitude != 0.0 {
             if self.gps_trail.len() >= MAX_DATA_POINTS {
                 self.gps_trail.pop_front();
@@ -156,6 +161,9 @@ impl AppState {
 
         let state_changed = self.last_flight_state.map_or(true, |s| s != t.state);
         if state_changed {
+            if t.state == FlightState::Prelaunch && (t.latitude != 0.0 || t.longitude != 0.0) {
+                self.launch_site = Some((t.latitude, t.longitude));
+            }
             self.push_console(ConsoleEntry::StateChange {
                 state: t.state,
                 elapsed_secs: self.session_start.elapsed().as_secs_f64(),
@@ -186,6 +194,7 @@ impl AppState {
         self.gyro_x.clear();
         self.gyro_y.clear();
         self.gyro_z.clear();
+        self.battery.clear();
         self.gps_trail.clear();
         self.packet_count = 0;
         self.bytes_received = 0;
@@ -204,6 +213,7 @@ impl AppState {
         self.console.clear();
         self.last_flight_state = None;
         self.session_start = Instant::now();
+        self.launch_site = None;
     }
 
     pub fn push_message(&mut self, text: &str) {
@@ -219,4 +229,22 @@ impl AppState {
             elapsed_secs: self.session_start.elapsed().as_secs_f64(),
         });
     }
+
+    pub fn downrange(&self) -> Option<f64> {
+        let (lat1, lon1) = self.launch_site?;
+        let t = self.latest.as_ref()?;
+        if t.latitude == 0.0 && t.longitude == 0.0 {
+            return None;
+        }
+        Some(haversine_m(lat1, lon1, t.latitude, t.longitude))
+    }
+}
+
+fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r = 6_371_000.0;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+    r * 2.0 * a.sqrt().asin()
 }

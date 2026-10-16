@@ -33,6 +33,7 @@ pub struct GroundStationApp {
     csv_recorder: Option<CsvRecorder>,
     controls_open: bool,
     map_detached: bool,
+    quat_detached: bool,
     logo_texture: Option<egui::TextureHandle>,
     active_tab: ActiveTab,
     sd_viewer: SdViewerState,
@@ -73,6 +74,7 @@ impl GroundStationApp {
             csv_recorder: None,
             controls_open: false,
             map_detached: false,
+            quat_detached: false,
             logo_texture,
             active_tab: ActiveTab::LiveTelemetry,
             sd_viewer: SdViewerState::new(),
@@ -175,7 +177,7 @@ impl GroundStationApp {
                 .min_size(250.0)
                 .resizable(true)
                 .show(root_ui, |ui| {
-                    Self::render_map_content(ui, &t, &self.state.gps_trail, self.state.ground_pos, &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
+                    Self::render_map_content(ui, &t, self.state.ground_pos, &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
                 });
         }
 
@@ -209,6 +211,8 @@ impl GroundStationApp {
                             theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", t.latitude), dm);
                             theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", t.longitude), dm);
                             theme::data_row(ui, "SATELLITES", &format!("{}", t.satellites), dm);
+                            let dr = self.state.downrange().map(|d| format!("{:.1} m", d)).unwrap_or_else(|| "—".into());
+                            theme::data_row(ui, "DOWNRANGE", &dr, dm);
                         }
                     });
                 });
@@ -218,17 +222,13 @@ impl GroundStationApp {
                 ui.columns(3, |cols| {
                     theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
                         if let Some(ref t) = t {
-                            let fault_list = [
-                                ("BMP280", t.flags & 0x03),
-                                ("BMP581", t.flags & 0x0C),
-                                ("IIM42653", t.flags & 0x30),
-                                ("IIS2MDCTR", t.flags & 0xC0),
-                                ("SD", t.flags & 0x300),
-                                ("W25Q", t.flags & 0x1C00),
-                            ];
-                            for (name, bits) in fault_list {
-                                let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
-                                theme::data_row_colored(ui, name, status, color, dm);
+                            let faults = packet::active_faults(t.flags);
+                            if faults.is_empty() {
+                                ui.label("NO FAULTS");
+                            } else {
+                                for f in &faults {
+                                    ui.colored_label(tc.red_accent, format!("⚠ {}", f));
+                                }
                             }
 
                             if t.state == FlightState::DeepCalibration {
@@ -304,15 +304,29 @@ impl GroundStationApp {
                     ui::charts::kalman_pz_chart(ui, &self.state);
                 });
                 ui.add_space(4.0);
-                theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
-                    if let Some(ref t) = t {
-                        crate::sd_viewer::charts::quaternion_orientation_viewer(
-                            ui, t.quat[0], t.quat[1], t.quat[2], t.quat[3], dm,
-                        );
-                    } else {
-                        ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
-                    }
+                theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
+                    ui::charts::battery_chart(ui, &self.state);
                 });
+                ui.add_space(4.0);
+                if !self.quat_detached {
+                    let quat_detached = &mut self.quat_detached;
+                    theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("DETACH").clicked() {
+                                    *quat_detached = true;
+                                }
+                            });
+                        });
+                        if let Some(ref t) = t {
+                            crate::sd_viewer::charts::quaternion_orientation_viewer(
+                                ui, t.quat[0], t.quat[1], t.quat[2], t.quat[3], dm,
+                            );
+                        } else {
+                            ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
+                        }
+                    });
+                }
 
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "RAW PACKET", tc.accent, dm, |ui| {
@@ -330,7 +344,6 @@ impl GroundStationApp {
     fn render_map_content(
         ui: &mut egui::Ui,
         t: &Option<packet::Telemetry>,
-        gps_trail: &std::collections::VecDeque<(f64, f64)>,
         ground_pos: Option<(f64, f64)>,
         lock_gps: &mut bool,
         map_state: &mut ui::map::MapState,
@@ -376,7 +389,6 @@ impl GroundStationApp {
             ui.add_space(4.0);
             let map_rect = ui::map::gps_map(
                 ui,
-                gps_trail,
                 current_gps,
                 ground_pos,
                 map_state,
@@ -444,7 +456,6 @@ impl GroundStationApp {
         let t = self.state.latest.clone();
 
         let map_detached = &mut self.map_detached;
-        let gps_trail = &self.state.gps_trail;
         let ground_pos = self.state.ground_pos;
         let lock_gps = &mut self.state.lock_gps;
         let map_state = &mut self.map_state;
@@ -464,7 +475,40 @@ impl GroundStationApp {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(4.0))
                     .show(ctx, |ui| {
-                        Self::render_map_content(ui, &t, gps_trail, ground_pos, lock_gps, map_state, dm, tc, map_detached);
+                        Self::render_map_content(ui, &t, ground_pos, lock_gps, map_state, dm, tc, map_detached);
+                    });
+            },
+        );
+    }
+
+    fn render_quat_viewport(&mut self, parent_ctx: &egui::Context) {
+        let dm = self.state.dark_mode;
+        let tc = theme::current_theme(dm);
+        let t = self.state.latest.clone();
+        let quat_detached = &mut self.quat_detached;
+
+        parent_ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("quat_viewer"),
+            egui::ViewportBuilder::default()
+                .with_title("Orientation \u{2014} Coheteros GS")
+                .with_inner_size([400.0, 400.0]),
+            |ctx, _class| {
+                theme::apply_visuals(ctx, dm);
+
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    *quat_detached = false;
+                }
+
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(4.0))
+                    .show(ctx, |ui| {
+                        if let Some(ref t) = t {
+                            crate::sd_viewer::charts::quaternion_orientation_viewer(
+                                ui, t.quat[0], t.quat[1], t.quat[2], t.quat[3], dm,
+                            );
+                        } else {
+                            ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
+                        }
                     });
             },
         );
@@ -488,7 +532,7 @@ impl GroundStationApp {
             egui::ViewportId::from_hash_of("flight_controls"),
             egui::ViewportBuilder::default()
                 .with_title("Flight Controls - Coheteros GS")
-                .with_inner_size([1600.0, 130.0])
+                .with_inner_size([1600.0, 200.0])
                 .with_always_on_top(),
             |ctx, _class| {
                 theme::apply_visuals(ctx, dm);
@@ -497,7 +541,7 @@ impl GroundStationApp {
                     *controls_open = false;
                 }
 
-                egui::Panel::top("ctrl_content")
+                egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(8.0))
                     .show(ctx, |ui| {
                         let section_label = |ui: &mut egui::Ui, text: &str| {
@@ -684,6 +728,56 @@ impl GroundStationApp {
                                 }
                             });
                         });
+
+                        ui.add_space(4.0);
+
+                        // Row 3: All flags
+                        if let Some(ref t) = t {
+                            ui.horizontal(|ui| {
+                                section_label(ui, "FLAGS");
+                                ui.label(egui::RichText::new(format!("0x{:08X}", t.flags)).size(11.0).family(egui::FontFamily::Monospace).color(tc.text_color));
+
+                                ui.separator();
+
+                                // Deep cal fields (bits 16-21)
+                                section_label(ui, "DEEP CAL");
+                                let faces = packet::deep_cal_faces_captured(t.flags);
+                                let current = packet::deep_cal_current_face(t.flags);
+                                let face_names = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
+                                let current_str = if current == 0 { "—" } else {
+                                    face_names.get((current - 1) as usize).unwrap_or(&"?")
+                                };
+                                ui.label(egui::RichText::new(format!("Faces: {}/6  Current: {}", faces, current_str)).size(10.0).color(tc.text_color));
+                            });
+                            let flags = packet::FAULT_NAMES;
+                            let cols = 7;
+                            let rows = (flags.len() + cols - 1) / cols;
+                            egui::Grid::new("ctrl_flags_grid")
+                                .spacing([12.0, 2.0])
+                                .show(ui, |ui| {
+                                    for row in 0..rows {
+                                        for col in 0..cols {
+                                            let idx = col * rows + row;
+                                            if let Some(&(bit, name)) = flags.get(idx) {
+                                                let set = t.flags & bit != 0;
+                                                let display_name = name.trim_end_matches(" Failed");
+                                                let (dot, color, status) = if set {
+                                                    ("\u{25cf}", tc.red_accent, "FAIL")
+                                                } else {
+                                                    ("\u{25cb}", tc.green, "OK")
+                                                };
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                                    ui.colored_label(color, egui::RichText::new(dot).size(10.0));
+                                                    ui.label(egui::RichText::new(display_name).size(10.0).color(tc.text_color));
+                                                    ui.colored_label(color, egui::RichText::new(status).size(9.0));
+                                                });
+                                            }
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        }
                     });
 
                 // Command confirmation modal
@@ -969,6 +1063,9 @@ impl eframe::App for GroundStationApp {
         }
         if self.map_detached {
             self.render_map_viewport(root_ui.ctx());
+        }
+        if self.quat_detached {
+            self.render_quat_viewport(root_ui.ctx());
         }
 
         match self.active_tab {
@@ -1263,14 +1360,8 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                         });
                     });
                     ui.add_space(4.0);
-                    let partial_trail: std::collections::VecDeque<(f64, f64)> = v.records[..=v.selected_index]
-                        .iter()
-                        .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
-                        .map(|r| (r.latitude, r.longitude))
-                        .collect();
                     let map_rect = ui::map::gps_map(
                         ui,
-                        &partial_trail,
                         current_gps,
                         None,
                         map_state,
@@ -1391,20 +1482,20 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             ui.add_space(4.0);
 
             ui.columns(4, |cols| {
-                theme::bordered_section(&mut cols[0], "FAULTS", tc.red_accent, dm, |ui| {
+                theme::bordered_section(&mut cols[0], "FLAGS", tc.red_accent, dm, |ui| {
                     if let Some(ref r) = r {
-                        let fault_list = [
-                            ("BMP280", r.flags & 0x03),
-                            ("BMP581", r.flags & 0x0C),
-                            ("IIM42653", r.flags & 0x30),
-                            ("IIS2MDCTR", r.flags & 0xC0),
-                            ("SD", r.flags & 0x300),
-                            ("W25Q", r.flags & 0x1C00),
-                        ];
-                        for (name, bits) in fault_list {
-                            let (status, color) = if bits == 0 { ("OK", tc.green) } else { ("FAIL", tc.red_accent) };
-                            theme::data_row_colored(ui, name, status, color, dm);
+                        theme::data_row(ui, "RAW", &format!("0x{:08X}", r.flags), dm);
+                        for &(bit, name) in packet::FAULT_NAMES {
+                            let set = r.flags & bit != 0;
+                            let display_name = name.trim_end_matches(" Failed");
+                            let (status, color) = if set { ("FAIL", tc.red_accent) } else { ("OK", tc.green) };
+                            theme::data_row_colored(ui, display_name, status, color, dm);
                         }
+                        ui.add_space(4.0);
+                        let faces = packet::deep_cal_faces_captured(r.flags);
+                        let current = packet::deep_cal_current_face(r.flags);
+                        theme::data_row(ui, "DEEP CAL FACES", &format!("{}/6", faces), dm);
+                        theme::data_row(ui, "DEEP CAL CURRENT", &format!("{}", current), dm);
                     }
                 });
 

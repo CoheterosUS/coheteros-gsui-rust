@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use walkers::{Map, MapMemory, lat_lon};
 use walkers::sources::{Attribution, TileSource};
 use walkers::TileId;
@@ -44,7 +42,6 @@ impl MapState {
 
 pub fn gps_map(
     ui: &mut egui::Ui,
-    trail: &VecDeque<(f64, f64)>,
     current_pos: Option<(f64, f64)>,
     ground_pos: Option<(f64, f64)>,
     map_state: &mut MapState,
@@ -78,23 +75,6 @@ pub fn gps_map(
     .show(&mut child_ui, |ui, _response, projector, _memory| {
         let painter = ui.painter_at(rect);
         let to_pos = |v: egui::Vec2| egui::pos2(v.x, v.y);
-
-        if trail.len() >= 2 {
-            let points: Vec<egui::Pos2> = trail
-                .iter()
-                .map(|&(lat, lon)| to_pos(projector.project(lat_lon(lat, lon))))
-                .collect();
-            for w in points.windows(2) {
-                painter.line_segment(
-                    [w[0], w[1]],
-                    egui::Stroke::new(4.0, egui::Color32::from_black_alpha(160)),
-                );
-                painter.line_segment(
-                    [w[0], w[1]],
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 80, 80)),
-                );
-            }
-        }
 
         if let Some((lat, lon)) = ground_pos {
             let pos = to_pos(projector.project(lat_lon(lat, lon)));

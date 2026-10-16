@@ -80,6 +80,7 @@ pub const FAULT_NAMES: &[(u32, &str)] = &[
     (1 << 10, "W25Q JEDEC ID Failed"),
     (1 << 11, "W25Q Init Failed"),
     (1 << 12, "W25Q Cal Write Failed"),
+    (1 << 13, "6-Point Cal Failed"),
 ];
 
 pub fn deep_cal_faces_captured(flags: u32) -> u8 {

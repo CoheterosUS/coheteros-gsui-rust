@@ -226,7 +226,7 @@ pub fn quaternion_orientation_viewer(
     qw: f64, qx: f64, qy: f64, qz: f64,
     dark_mode: bool,
 ) {
-    let size = egui::vec2(ui.available_width(), 260.0);
+    let size = egui::vec2(ui.available_width(), ui.available_height().max(260.0));
     let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
     let center = response.rect.center();
 
@@ -238,8 +238,8 @@ pub fn quaternion_orientation_viewer(
     let ax_e = egui::Color32::from_rgb(70, 175, 90);
     let ax_u = egui::Color32::from_rgb(85, 135, 225);
 
-    // orbit camera state: yaw, pitch, distance, pan
-    let default_cam = (0.35_f32, 2.0_f32, 3.2_f32, egui::Vec2::ZERO);
+    // orbit camera state: azimuth, polar (from Up axis), distance, pan
+    let default_cam = (0.35_f32, 1.1_f32, 3.2_f32, egui::Vec2::ZERO);
     let mut cam_st: (f32, f32, f32, egui::Vec2) =
         ui.data_mut(|d| *d.get_temp_mut_or(response.id, default_cam));
     if response.double_clicked() {
@@ -247,14 +247,13 @@ pub fn quaternion_orientation_viewer(
     }
     let drag = response.drag_delta();
     if response.dragged_by(egui::PointerButton::Primary) {
-        cam_st.0 -= drag.x * 0.008;
-        cam_st.1 = (cam_st.1 + drag.y * 0.008).clamp(0.25, 2.9);
+        cam_st.0 += drag.x * 0.008;
+        cam_st.1 = (cam_st.1 - drag.y * 0.008).clamp(0.25, 2.9);
     }
     if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
         cam_st.3 += egui::vec2(-drag.x, drag.y) * cam_st.2 * 0.0035;
     }
     if response.hovered() {
-        // consume scroll so the enclosing ScrollArea does not also move
         let sc = ui.input_mut(|i| {
             let s = i.smooth_scroll_delta.y;
             if s != 0.0 {
@@ -268,7 +267,7 @@ pub fn quaternion_orientation_viewer(
     }
     ui.data_mut(|d| d.insert_temp(response.id, cam_st));
 
-    // body frame -> NED via quaternion. kept in NED (no axis mirroring) so roll stays faithful
+    // body frame -> NED via quaternion
     let rot = |px: f64, py: f64, pz: f64| -> [f64; 3] {
         let (w, x, y, z) = (qw, qx, qy, qz);
         [
@@ -278,17 +277,23 @@ pub fn quaternion_orientation_viewer(
         ]
     };
 
-    // perspective orbit camera in NED, orbiting the North axis so North is always screen-up.
-    // az spins about North, pol is the angle off North (clamped away from the poles where
-    // the view direction would be parallel to North and the up reference would collapse).
+    // perspective orbit camera orbiting the Up axis (-Z in NED) so U faces screen-up.
+    // az = azimuth in XY plane, pol = angle from -Z (0=top, π/2=equator, π=bottom).
     let (az, pol, dist) = (cam_st.0 as f64, cam_st.1 as f64, cam_st.2 as f64);
-    let cdir = [pol.cos(), pol.sin() * az.sin(), -pol.sin() * az.cos()];
+    // camera direction from origin (spherical → NED cartesian, pole = -Z)
+    let cdir = [pol.sin() * az.cos(), pol.sin() * az.sin(), -pol.cos()];
     let fwd = [-cdir[0], -cdir[1], -cdir[2]];
+    // up reference = -Z (Up in NED)
+    let up_ref = [0.0_f64, 0.0, -1.0];
     let right = {
-        // cross(fwd, North) with North = (1,0,0)
-        let c = [0.0, fwd[2], -fwd[1]];
-        let l = (c[1] * c[1] + c[2] * c[2]).sqrt().max(1e-9);
-        [0.0, c[1] / l, c[2] / l]
+        // cross(fwd, up_ref)
+        let c = [
+            fwd[1] * up_ref[2] - fwd[2] * up_ref[1],
+            fwd[2] * up_ref[0] - fwd[0] * up_ref[2],
+            fwd[0] * up_ref[1] - fwd[1] * up_ref[0],
+        ];
+        let l = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().max(1e-9);
+        [c[0] / l, c[1] / l, c[2] / l]
     };
     let up = [
         right[1] * fwd[2] - right[2] * fwd[1],
@@ -323,20 +328,25 @@ pub fn quaternion_orientation_viewer(
     };
     let mut labels: Vec<(egui::Pos2, &str, egui::Color32)> = Vec::new();
 
-    // ground ring
+    // wireframe sphere: three great circles (XY, XZ, YZ planes)
     let ref_stroke = egui::Stroke::new(0.5, ref_color);
     let steps = 48;
     for i in 0..steps {
         let a0 = std::f64::consts::TAU * i as f64 / steps as f64;
         let a1 = std::f64::consts::TAU * (i + 1) as f64 / steps as f64;
+        // XY plane (equator / ground ring)
         segs.extend(seg([a0.cos(), a0.sin(), 0.0], [a1.cos(), a1.sin(), 0.0], ref_stroke));
+        // XZ plane (vertical N-S)
+        segs.extend(seg([a0.cos(), 0.0, a0.sin()], [a1.cos(), 0.0, a1.sin()], ref_stroke));
+        // YZ plane (vertical E-W)
+        segs.extend(seg([0.0, a0.cos(), a0.sin()], [0.0, a1.cos(), a1.sin()], ref_stroke));
     }
 
     // three world axes, drawn dim so they read as reference, not as the vehicle triad
     for (dir, color, name) in [
         ([1.45_f64, 0.0, 0.0], label_color, "N"),
         ([0.0, 1.45, 0.0], label_color, "E"),
-        ([0.0, 0.0, -1.45], label_color, "U"),
+        ([0.0, 0.0, 1.45], label_color, "D"),
     ] {
         segs.extend(seg([0.0, 0.0, 0.0], dir, egui::Stroke::new(1.2, color.gamma_multiply(0.75))));
         let (tip, z) = project(dir);
@@ -406,12 +416,17 @@ pub fn quaternion_orientation_viewer(
         painter.text(pos, egui::Align2::LEFT_BOTTOM, name, lf.clone(), color);
     }
 
-    // euler angles readout
-    let (w, x, y, z) = (qw, qx, qy, qz);
-    let roll = (2.0 * (w * x + y * z)).atan2(1.0 - 2.0 * (x * x + y * y)).to_degrees();
-    let sin_p = 2.0 * (w * y - z * x);
-    let pitch_deg = if sin_p.abs() >= 1.0 { 90.0_f64.copysign(sin_p) } else { sin_p.asin().to_degrees() };
-    let yaw_deg = (2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z)).to_degrees();
+    // euler angles: pitch = nose above horizontal, yaw = heading, roll = body-X spin
+    // Computed from rotation matrix columns (body axes in NED)
+    let bx = rot(1.0, 0.0, 0.0); // body-X (nose) in NED
+    let by = rot(0.0, 1.0, 0.0); // body-Y in NED
+    let bz = rot(0.0, 0.0, 1.0); // body-Z in NED
+    // pitch: angle of nose above horizontal. In NED, -Z is up.
+    let pitch_deg = (-bx[2]).atan2((bx[0] * bx[0] + bx[1] * bx[1]).sqrt()).to_degrees();
+    // yaw: heading of nose projected onto horizontal plane
+    let yaw_deg = bx[1].atan2(bx[0]).to_degrees();
+    // roll: rotation about body-X. atan2 of body-Y down vs body-Z down.
+    let roll = (-by[2]).atan2(-bz[2]).to_degrees();
 
     let text_c = if dark_mode { egui::Color32::from_rgb(130, 130, 130) } else { egui::Color32::from_rgb(90, 90, 90) };
     let vf = egui::FontId::new(11.0, egui::FontFamily::Monospace);
@@ -423,13 +438,6 @@ pub fn quaternion_orientation_viewer(
         format!("R {:+7.1}\u{00b0}  P {:+7.1}\u{00b0}  Y {:+7.1}\u{00b0}", roll, pitch_deg, yaw_deg),
         vf,
         text_c,
-    );
-    painter.text(
-        egui::pos2(rect.right() - m, rect.bottom() - m),
-        egui::Align2::RIGHT_BOTTOM,
-        "BODY X=ALONG ROCKET Y=RIGHT Z=DOWN \u{00b7} N/E/U WORLD \u{00b7} DRAG ORBIT \u{00b7} RIGHT-DRAG PAN \u{00b7} SCROLL ZOOM",
-        egui::FontId::new(9.0, egui::FontFamily::Monospace),
-        label_color,
     );
 }
 
