@@ -663,6 +663,7 @@ impl SdViewerState {
                     Command::Drogue => ("CMD: DROGUE", egui::Color32::from_rgb(255, 165, 0)),
                     Command::Landed => ("CMD: LANDED", egui::Color32::from_rgb(80, 200, 80)),
                     Command::DeepCalibration => ("CMD: DEEP CAL", egui::Color32::from_rgb(160, 120, 200)),
+                    Command::HilStart => ("CMD: HIL START", egui::Color32::from_rgb(100, 180, 220)),
                     Command::RequestTelemA | Command::RequestTelemB => continue,
                     Command::None => unreachable!(),
                 };

@@ -129,6 +129,7 @@ pub enum Command {
     DeepCalibration = 0x06,
     RequestTelemA = 0x07,
     RequestTelemB = 0x08,
+    HilStart = 0x09,
 }
 
 impl Command {
@@ -143,6 +144,7 @@ impl Command {
             0x06 => Some(Self::DeepCalibration),
             0x07 => Some(Self::RequestTelemA),
             0x08 => Some(Self::RequestTelemB),
+            0x09 => Some(Self::HilStart),
             _ => None,
         }
     }
@@ -164,6 +166,7 @@ impl fmt::Display for Command {
             Self::DeepCalibration => write!(f, "DEEP CALIBRATION"),
             Self::RequestTelemA => write!(f, "REQUEST TELEM A"),
             Self::RequestTelemB => write!(f, "REQUEST TELEM B"),
+            Self::HilStart => write!(f, "HIL START"),
         }
     }
 }

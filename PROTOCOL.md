@@ -47,6 +47,7 @@ Any agent that reads this file should not assume that any information is correct
 | `0x06` | COMMAND_DEEP_CALIBRATION | 1-byte payload: face index (1-6) |
 | `0x07` | COMMAND_REQUEST_TELEM_A | FC responds with COMMAND_RESPONSE_TELEM_A |
 | `0x08` | COMMAND_REQUEST_TELEM_B | FC responds with COMMAND_RESPONSE_TELEM_B |
+| `0x09` | COMMAND_HIL_START     | Start HIL from SD (HIL.BIN), IDLE only |
 | `0x10` | COMMAND_HIL_DATA      | Excluded From LastCommand |
 | `0x20` | COMMAND_GPS_DATA      | Excluded From LastCommand |
 | `0x80` | COMMAND_RESPONSE_TELEM_A | Response only, FC to ground |

@@ -728,6 +728,15 @@ impl GroundStationApp {
                                 }
 
                                 ui.separator();
+                                section_label(ui, "HIL");
+                                if ui.add_enabled(
+                                    t.as_ref().is_some_and(|telemetry| telemetry.state == FlightState::Idle),
+                                    red_btn("START HIL"),
+                                ).clicked() {
+                                    *pending_command = Some(Command::HilStart);
+                                }
+
+                                ui.separator();
 
                                 // -- Deep calibration group --
                                 section_label(ui, "DEEP CAL");
