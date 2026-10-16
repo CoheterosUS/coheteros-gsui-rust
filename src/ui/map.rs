@@ -44,7 +44,7 @@ pub fn gps_map(
     ui: &mut egui::Ui,
     current_pos: Option<(f64, f64)>,
     ground_pos: Option<(f64, f64)>,
-    launch_site: Option<(f64, f64)>,
+    launch_site: &mut Option<(f64, f64)>,
     map_state: &mut MapState,
 ) -> egui::Rect {
     let my_pos = current_pos
@@ -73,7 +73,14 @@ pub fn gps_map(
         &mut map_state.memory,
         my_pos,
     )
-    .show(&mut child_ui, |ui, _response, projector, _memory| {
+    .show(&mut child_ui, |ui, response, projector, _memory| {
+        if response.secondary_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let geo = projector.unproject(pos.to_vec2());
+                *launch_site = Some((geo.y(), geo.x()));
+            }
+        }
+
         let painter = ui.painter_at(rect);
         let to_pos = |v: egui::Vec2| egui::pos2(v.x, v.y);
 
@@ -99,7 +106,7 @@ pub fn gps_map(
 
             }
 
-            if let Some((llat, llon)) = launch_site {
+            if let Some((llat, llon)) = *launch_site {
                 let launch = to_pos(projector.project(lat_lon(llat, llon)));
                 painter.line_segment(
                     [launch, rocket],
@@ -109,14 +116,16 @@ pub fn gps_map(
                     [launch, rocket],
                     egui::Stroke::new(2.0, egui::Color32::GREEN),
                 );
-
-
-                painter.circle_filled(launch, 7.0, egui::Color32::BLACK);
-                painter.circle_filled(launch, 5.0, egui::Color32::GREEN);
             }
 
             painter.circle_filled(rocket, 8.0, egui::Color32::BLACK);
             painter.circle_filled(rocket, 6.0, egui::Color32::RED);
+        }
+
+        if let Some((llat, llon)) = *launch_site {
+            let launch = to_pos(projector.project(lat_lon(llat, llon)));
+            painter.circle_filled(launch, 7.0, egui::Color32::BLACK);
+            painter.circle_filled(launch, 5.0, egui::Color32::GREEN);
         }
     });
     rect

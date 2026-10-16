@@ -190,7 +190,9 @@ impl GroundStationApp {
                 .min_size(250.0)
                 .resizable(true)
                 .show(root_ui, |ui| {
-                    Self::render_map_content(ui, &t, self.state.ground_pos, self.state.distance_from_gs(), self.state.launch_site, self.state.downrange(), &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
+                    let gs_dist = self.state.distance_from_gs();
+                    let dr = self.state.downrange();
+                    Self::render_map_content(ui, &t, self.state.ground_pos, gs_dist, &mut self.state.launch_site, dr, &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
                 });
         }
 
@@ -365,7 +367,7 @@ impl GroundStationApp {
         t: &Option<packet::Telemetry>,
         ground_pos: Option<(f64, f64)>,
         gs_distance_m: Option<f64>,
-        launch_site: Option<(f64, f64)>,
+        launch_site: &mut Option<(f64, f64)>,
         downrange_m: Option<f64>,
         lock_gps: &mut bool,
         map_state: &mut ui::map::MapState,
@@ -409,6 +411,15 @@ impl GroundStationApp {
                 });
             });
             ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("CLEAR LAUNCH").clicked() {
+                    *launch_site = None;
+                }
+                if let Some((lat, lon)) = *launch_site {
+                    ui.colored_label(tc.green, format!("{:.5}, {:.5}", lat, lon));
+                }
+            });
+            ui.add_space(2.0);
             let map_rect = ui::map::gps_map(
                 ui,
                 current_gps,
@@ -484,8 +495,8 @@ impl GroundStationApp {
         let map_detached = &mut self.map_detached;
         let ground_pos = self.state.ground_pos;
         let gs_distance_m = self.state.distance_from_gs();
-        let launch_site = self.state.launch_site;
         let downrange_m = self.state.downrange();
+        let launch_site = &mut self.state.launch_site;
         let lock_gps = &mut self.state.lock_gps;
         let map_state = &mut self.map_state;
 
@@ -1396,7 +1407,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                         ui,
                         current_gps,
                         None,
-                        None,
+                        &mut None,
                         map_state,
                     );
 
