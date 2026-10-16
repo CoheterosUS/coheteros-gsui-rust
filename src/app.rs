@@ -120,6 +120,13 @@ impl GroundStationApp {
 
                 if let Some(ref t) = t {
                     ui.separator();
+                    let src_label = match t.source {
+                        packet::TelemetrySource::A => "PKT A",
+                        packet::TelemetrySource::B => "PKT B",
+                        packet::TelemetrySource::Full => "PKT F",
+                    };
+                    ui.label(egui::RichText::new(src_label).family(egui::FontFamily::Name("Bold".into())).color(tc.accent));
+                    ui.separator();
                     ui.label("TICK");
                     ui.label(egui::RichText::new(format!("{}", t.tick)).family(egui::FontFamily::Name("Bold".into())));
                     ui.separator();
@@ -128,6 +135,12 @@ impl GroundStationApp {
                     ui.separator();
                     ui.label("POS Z \u{03c3}");
                     ui.label(egui::RichText::new(format!("{:.2} m", t.kalman_pz.max(0.0).sqrt())).family(egui::FontFamily::Name("Bold".into())));
+                    ui.separator();
+                    ui.label("PRESSURE");
+                    ui.label(egui::RichText::new(format!("{:.0} Pa", t.pressure_pa)).family(egui::FontFamily::Name("Bold".into())).color(tc.yellow));
+                    ui.separator();
+                    ui.label("TEMP");
+                    ui.label(egui::RichText::new(format!("{:.1} \u{00b0}C", t.temperature_c)).family(egui::FontFamily::Name("Bold".into())).color(tc.red_accent));
                 }
             });
         });
@@ -177,7 +190,7 @@ impl GroundStationApp {
                 .min_size(250.0)
                 .resizable(true)
                 .show(root_ui, |ui| {
-                    Self::render_map_content(ui, &t, self.state.ground_pos, &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
+                    Self::render_map_content(ui, &t, self.state.ground_pos, self.state.distance_from_gs(), self.state.launch_site, self.state.downrange(), &mut self.state.lock_gps, &mut self.map_state, dm, tc, &mut self.map_detached);
                 });
         }
 
@@ -211,8 +224,6 @@ impl GroundStationApp {
                             theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", t.latitude), dm);
                             theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", t.longitude), dm);
                             theme::data_row(ui, "SATELLITES", &format!("{}", t.satellites), dm);
-                            let dr = self.state.downrange().map(|d| format!("{:.1} m", d)).unwrap_or_else(|| "—".into());
-                            theme::data_row(ui, "DOWNRANGE", &dr, dm);
                         }
                     });
                 });
@@ -308,6 +319,14 @@ impl GroundStationApp {
                     ui::charts::battery_chart(ui, &self.state);
                 });
                 ui.add_space(4.0);
+                theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
+                    ui::charts::pressure_chart(ui, &self.state);
+                });
+                ui.add_space(4.0);
+                theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
+                    ui::charts::temperature_chart(ui, &self.state);
+                });
+                ui.add_space(4.0);
                 if !self.quat_detached {
                     let quat_detached = &mut self.quat_detached;
                     theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
@@ -331,7 +350,7 @@ impl GroundStationApp {
                 ui.add_space(4.0);
                 theme::bordered_section(ui, "RAW PACKET", tc.accent, dm, |ui| {
                     if let Some(ref t) = t {
-                        ui::hex_viewer::hex_viewer(ui, &t.raw, packet::PACKET_FIELDS, dm);
+                        ui::hex_viewer::hex_viewer(ui, &t.raw, packet::packet_fields_for(t.source), dm);
                     } else {
                         ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
                     }
@@ -345,6 +364,9 @@ impl GroundStationApp {
         ui: &mut egui::Ui,
         t: &Option<packet::Telemetry>,
         ground_pos: Option<(f64, f64)>,
+        gs_distance_m: Option<f64>,
+        launch_site: Option<(f64, f64)>,
+        downrange_m: Option<f64>,
         lock_gps: &mut bool,
         map_state: &mut ui::map::MapState,
         dm: bool,
@@ -391,12 +413,23 @@ impl GroundStationApp {
                 ui,
                 current_gps,
                 ground_pos,
+                launch_site,
                 map_state,
             );
 
             if let Some(t) = t.as_ref() {
+                let rows: &[(&str, String, egui::Color32)] = &[
+                    ("LAT", format!("{:.6}\u{00b0}", t.latitude), tc.value_color),
+                    ("LON", format!("{:.6}\u{00b0}", t.longitude), tc.value_color),
+                    ("ALT", format!("{:.1} m", t.gps_altitude), tc.value_color),
+                    ("SAT", format!("{}", t.satellites), if t.satellites >= 4 { tc.green } else { tc.red_accent }),
+                    ("DR", downrange_m.map(|d| format!("{:.1} m", d)).unwrap_or_else(|| "\u{2014}".into()), tc.green),
+                    ("GS", gs_distance_m.map(|d| format!("{:.1} m", d)).unwrap_or_else(|| "\u{2014}".into()), tc.value_color),
+                ];
+
+                let line_h = 18.0;
                 let overlay_width = 195.0;
-                let overlay_height = 100.0;
+                let overlay_height = (rows.len() as f32 + 1.0) * line_h + 10.0;
                 let overlay_pos = egui::pos2(
                     map_rect.right() - overlay_width - 4.0,
                     map_rect.bottom() - overlay_height - 4.0,
@@ -415,17 +448,10 @@ impl GroundStationApp {
                 let mut y = overlay_rect.top() + 5.0;
                 let x_label = overlay_rect.left() + 8.0;
                 let x_value = overlay_rect.left() + 44.0;
-                let line_h = 18.0;
 
                 let font = egui::FontId::monospace(s);
                 let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
 
-                let rows: &[(&str, String, egui::Color32)] = &[
-                    ("LAT", format!("{:.6}\u{00b0}", t.latitude), tc.value_color),
-                    ("LON", format!("{:.6}\u{00b0}", t.longitude), tc.value_color),
-                    ("ALT", format!("{:.1} m", t.gps_altitude), tc.value_color),
-                    ("SAT", format!("{}", t.satellites), if t.satellites >= 4 { tc.green } else { tc.red_accent }),
-                ];
                 for (label, value, color) in rows {
                     painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
                     painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
@@ -457,6 +483,9 @@ impl GroundStationApp {
 
         let map_detached = &mut self.map_detached;
         let ground_pos = self.state.ground_pos;
+        let gs_distance_m = self.state.distance_from_gs();
+        let launch_site = self.state.launch_site;
+        let downrange_m = self.state.downrange();
         let lock_gps = &mut self.state.lock_gps;
         let map_state = &mut self.map_state;
 
@@ -475,7 +504,7 @@ impl GroundStationApp {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(4.0))
                     .show(ctx, |ui| {
-                        Self::render_map_content(ui, &t, ground_pos, lock_gps, map_state, dm, tc, map_detached);
+                        Self::render_map_content(ui, &t, ground_pos, gs_distance_m, launch_site, downrange_m, lock_gps, map_state, dm, tc, map_detached);
                     });
             },
         );
@@ -945,24 +974,27 @@ impl eframe::App for GroundStationApp {
                 let half_pitch = (90.0 - 70.0 * t_frac).to_radians() / 2.0;
                 self.state.push_telemetry(packet::Telemetry {
                     raw: [0u8; packet::PACKET_SIZE],
+                    source: packet::TelemetrySource::Full,
                     tick: (i as u32) * 100,
                     accel: [ax, ay, az],
                     gyro: [gx, gy, gz],
+                    quat: [half_pitch.cos(), 0.0, half_pitch.sin(), 0.0],
+                    state,
+                    baro_altitude: alt,
+                    pos_z: -alt,
+                    vel_z: -vel,
+                    kalman_pz: 0.5 + t_frac * 3.0,
+                    flags: 0,
+                    relay: packet::RelayState { drogue_fired: t_frac > 0.5, parachute_fired: false },
+                    satellites: 12,
+                    last_command: Command::Calibration,
                     latitude: base_lat + drift,
                     longitude: base_lon + drift * 0.7,
                     gps_altitude: alt + 2.0 * (t_frac * 41.0).sin(),
-                    satellites: 12,
-                    baro_altitude: alt,
-                    // NED: down-positive, so climb and altitude invert
-                    pos_z: -alt,
-                    vel_z: -vel,
-                    quat: [half_pitch.cos(), 0.0, half_pitch.sin(), 0.0],
-                    kalman_pz: 0.5 + t_frac * 3.0,
-                    flags: 0,
+                    unix_time: 1700000000 + (i as u32),
+                    pressure_pa: 101325.0 - alt * 12.0,
+                    temperature_c: 25.0 - alt * 0.0065,
                     battery_voltage: 4.05 - t_frac * 0.25,
-                    state,
-                    relay: packet::RelayState { drogue_fired: t_frac > 0.5, parachute_fired: false },
-                    last_command: Command::Calibration,
                 });
             }
             self.state.connected = true;
@@ -1363,6 +1395,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                     let map_rect = ui::map::gps_map(
                         ui,
                         current_gps,
+                        None,
                         None,
                         map_state,
                     );

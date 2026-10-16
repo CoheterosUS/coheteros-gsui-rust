@@ -1,9 +1,12 @@
 use std::fmt;
 
-pub const PACKET_SIZE: usize = 52;
+pub const PACKET_SIZE: usize = 53;
 pub const SYNC_WORD: u16 = 0xCAFE;
 pub const SYNC_END: u8 = 0xBE;
-pub const SCALE: f64 = 100.0;
+pub const ACCEL_SCALE: f64 = 100.0;
+pub const GYRO_SCALE: f64 = 10.0;
+pub const QUAT_SCALE: f64 = 10_000.0;
+pub const TEMP_SCALE: f64 = 100.0;
 pub const GPS_SCALE: f64 = 10_000_000.0;
 pub const BATTERY_SCALE: f64 = 10.0;
 
@@ -123,8 +126,9 @@ pub enum Command {
     Calibration = 0x03,
     Drogue = 0x04,
     Landed = 0x05,
-    RequestTelem = 0x06,
-    DeepCalibration = 0x07,
+    DeepCalibration = 0x06,
+    RequestTelemA = 0x07,
+    RequestTelemB = 0x08,
 }
 
 impl Command {
@@ -136,8 +140,9 @@ impl Command {
             0x03 => Some(Self::Calibration),
             0x04 => Some(Self::Drogue),
             0x05 => Some(Self::Landed),
-            0x06 => Some(Self::RequestTelem),
-            0x07 => Some(Self::DeepCalibration),
+            0x06 => Some(Self::DeepCalibration),
+            0x07 => Some(Self::RequestTelemA),
+            0x08 => Some(Self::RequestTelemB),
             _ => None,
         }
     }
@@ -156,8 +161,9 @@ impl fmt::Display for Command {
             Self::Calibration => write!(f, "CALIBRATION"),
             Self::Drogue => write!(f, "DROGUE"),
             Self::Landed => write!(f, "LANDED"),
-            Self::RequestTelem => write!(f, "REQUEST TELEM"),
             Self::DeepCalibration => write!(f, "DEEP CALIBRATION"),
+            Self::RequestTelemA => write!(f, "REQUEST TELEM A"),
+            Self::RequestTelemB => write!(f, "REQUEST TELEM B"),
         }
     }
 }
@@ -185,6 +191,13 @@ pub fn build_command_frame_with_payload(cmd: Command, payload: &[u8]) -> Vec<u8>
     frame
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetrySource {
+    A,
+    B,
+    Full,
+}
+
 pub struct PacketField {
     pub name: &'static str,
     pub offset: usize,
@@ -192,94 +205,132 @@ pub struct PacketField {
     pub color: [u8; 3],
 }
 
-pub const PACKET_FIELDS: &[PacketField] = &[
+pub const PACKET_FIELDS_A: &[PacketField] = &[
     PacketField { name: "SYNC",      offset: 0,  length: 2, color: [255, 255, 255] },
-    PacketField { name: "TICK",      offset: 2,  length: 4, color: [100, 200, 255] },
-    PacketField { name: "ACCEL X",   offset: 6,  length: 2, color: [255, 100, 100] },
-    PacketField { name: "ACCEL Y",   offset: 8,  length: 2, color: [255, 130, 100] },
-    PacketField { name: "ACCEL Z",   offset: 10, length: 2, color: [255, 160, 100] },
-    PacketField { name: "GYRO X",    offset: 12, length: 2, color: [100, 255, 100] },
-    PacketField { name: "GYRO Y",    offset: 14, length: 2, color: [130, 255, 100] },
-    PacketField { name: "GYRO Z",    offset: 16, length: 2, color: [160, 255, 100] },
-    PacketField { name: "LAT",       offset: 18, length: 4, color: [50, 200, 200] },
-    PacketField { name: "LON",       offset: 22, length: 4, color: [80, 220, 200] },
-    PacketField { name: "GPS ALT",   offset: 26, length: 2, color: [110, 240, 200] },
-    PacketField { name: "SATS",      offset: 28, length: 1, color: [140, 255, 200] },
-    PacketField { name: "BARO ALT",  offset: 29, length: 2, color: [255, 100, 200] },
-    PacketField { name: "POS Z",     offset: 31, length: 2, color: [180, 255, 220] },
-    PacketField { name: "VEL Z",     offset: 33, length: 2, color: [255, 220, 180] },
-    PacketField { name: "QUAT W",    offset: 35, length: 1, color: [180, 180, 255] },
-    PacketField { name: "QUAT X",    offset: 36, length: 1, color: [200, 180, 255] },
-    PacketField { name: "QUAT Y",    offset: 37, length: 1, color: [220, 180, 255] },
-    PacketField { name: "QUAT Z",    offset: 38, length: 1, color: [240, 180, 255] },
-    PacketField { name: "KALMAN PZ", offset: 39, length: 4, color: [120, 220, 240] },
-    PacketField { name: "FLAGS",     offset: 43, length: 4, color: [255, 80, 80] },
-    PacketField { name: "BATTERY",   offset: 47, length: 1, color: [255, 255, 0] },
-    PacketField { name: "STATE",     offset: 48, length: 1, color: [0, 200, 255] },
+    PacketField { name: "CMD",       offset: 2,  length: 1, color: [180, 180, 255] },
+    PacketField { name: "LEN",       offset: 3,  length: 1, color: [180, 180, 255] },
+    PacketField { name: "TICK",      offset: 4,  length: 4, color: [100, 200, 255] },
+    PacketField { name: "ACCEL X",   offset: 8,  length: 2, color: [255, 100, 100] },
+    PacketField { name: "ACCEL Y",   offset: 10, length: 2, color: [255, 130, 100] },
+    PacketField { name: "ACCEL Z",   offset: 12, length: 2, color: [255, 160, 100] },
+    PacketField { name: "GYRO X",    offset: 14, length: 2, color: [100, 255, 100] },
+    PacketField { name: "GYRO Y",    offset: 16, length: 2, color: [130, 255, 100] },
+    PacketField { name: "GYRO Z",    offset: 18, length: 2, color: [160, 255, 100] },
+    PacketField { name: "QUAT W",    offset: 20, length: 2, color: [180, 180, 255] },
+    PacketField { name: "QUAT X",    offset: 22, length: 2, color: [200, 180, 255] },
+    PacketField { name: "QUAT Y",    offset: 24, length: 2, color: [220, 180, 255] },
+    PacketField { name: "QUAT Z",    offset: 26, length: 2, color: [240, 180, 255] },
+    PacketField { name: "STATE",     offset: 28, length: 1, color: [0, 200, 255] },
+    PacketField { name: "BARO ALT",  offset: 29, length: 4, color: [255, 100, 200] },
+    PacketField { name: "POS Z",     offset: 33, length: 4, color: [180, 255, 220] },
+    PacketField { name: "VEL Z",     offset: 37, length: 4, color: [255, 220, 180] },
+    PacketField { name: "KALMAN PZ", offset: 41, length: 4, color: [120, 220, 240] },
+    PacketField { name: "FLAGS",     offset: 45, length: 4, color: [255, 80, 80] },
     PacketField { name: "RELAY",     offset: 49, length: 1, color: [255, 165, 0] },
-    PacketField { name: "CMD",       offset: 50, length: 1, color: [180, 180, 255] },
-    PacketField { name: "SYNC END",  offset: 51, length: 1, color: [255, 255, 255] },
+    PacketField { name: "SATS",      offset: 50, length: 1, color: [140, 255, 200] },
+    PacketField { name: "LAST CMD",  offset: 51, length: 1, color: [180, 180, 255] },
+    PacketField { name: "SYNC END",  offset: 52, length: 1, color: [255, 255, 255] },
 ];
+
+pub const PACKET_FIELDS_B: &[PacketField] = &[
+    PacketField { name: "SYNC",      offset: 0,  length: 2, color: [255, 255, 255] },
+    PacketField { name: "CMD",       offset: 2,  length: 1, color: [180, 180, 255] },
+    PacketField { name: "LEN",       offset: 3,  length: 1, color: [180, 180, 255] },
+    PacketField { name: "TICK",      offset: 4,  length: 4, color: [100, 200, 255] },
+    PacketField { name: "ACCEL X",   offset: 8,  length: 2, color: [255, 100, 100] },
+    PacketField { name: "ACCEL Y",   offset: 10, length: 2, color: [255, 130, 100] },
+    PacketField { name: "ACCEL Z",   offset: 12, length: 2, color: [255, 160, 100] },
+    PacketField { name: "GYRO X",    offset: 14, length: 2, color: [100, 255, 100] },
+    PacketField { name: "GYRO Y",    offset: 16, length: 2, color: [130, 255, 100] },
+    PacketField { name: "GYRO Z",    offset: 18, length: 2, color: [160, 255, 100] },
+    PacketField { name: "QUAT W",    offset: 20, length: 2, color: [180, 180, 255] },
+    PacketField { name: "QUAT X",    offset: 22, length: 2, color: [200, 180, 255] },
+    PacketField { name: "QUAT Y",    offset: 24, length: 2, color: [220, 180, 255] },
+    PacketField { name: "QUAT Z",    offset: 26, length: 2, color: [240, 180, 255] },
+    PacketField { name: "STATE",     offset: 28, length: 1, color: [0, 200, 255] },
+    PacketField { name: "LAT",       offset: 29, length: 4, color: [50, 200, 200] },
+    PacketField { name: "LON",       offset: 33, length: 4, color: [80, 220, 200] },
+    PacketField { name: "GPS ALT",   offset: 37, length: 4, color: [110, 240, 200] },
+    PacketField { name: "UNIX TIME", offset: 41, length: 4, color: [200, 200, 100] },
+    PacketField { name: "PRESSURE",  offset: 45, length: 4, color: [200, 150, 255] },
+    PacketField { name: "TEMP",      offset: 49, length: 2, color: [255, 200, 100] },
+    PacketField { name: "BATTERY",   offset: 51, length: 1, color: [255, 255, 0] },
+    PacketField { name: "SYNC END",  offset: 52, length: 1, color: [255, 255, 255] },
+];
+
+pub fn packet_fields_for(source: TelemetrySource) -> &'static [PacketField] {
+    match source {
+        TelemetrySource::A => PACKET_FIELDS_A,
+        TelemetrySource::B => PACKET_FIELDS_B,
+        TelemetrySource::Full => PACKET_FIELDS_A,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Telemetry {
     pub raw: [u8; PACKET_SIZE],
+    pub source: TelemetrySource,
     pub tick: u32,
     pub accel: [f64; 3],
     pub gyro: [f64; 3],
+    pub quat: [f64; 4],
+    pub state: FlightState,
+    // A-only fields
+    pub baro_altitude: f64,
+    pub pos_z: f64,
+    pub vel_z: f64,
+    pub kalman_pz: f64,
+    pub flags: u32,
+    pub relay: RelayState,
+    pub satellites: u8,
+    pub last_command: Command,
+    // B-only fields
     pub latitude: f64,
     pub longitude: f64,
     pub gps_altitude: f64,
-    pub satellites: u8,
-    pub baro_altitude: f64,
-    /// Kalman NED position Z (down-positive)
-    pub pos_z: f64,
-    /// Kalman NED velocity Z (down-positive)
-    pub vel_z: f64,
-    pub quat: [f64; 4],
-    /// Kalman pos-Z variance P[2,2]
-    pub kalman_pz: f64,
-    pub flags: u32,
+    pub unix_time: u32,
+    pub pressure_pa: f64,
+    pub temperature_c: f64,
     pub battery_voltage: f64,
-    pub state: FlightState,
-    pub relay: RelayState,
-    pub last_command: Command,
 }
 
 impl Telemetry {
     pub fn csv_header() -> &'static [&'static str] {
         &[
-            "ground_timestamp",
+            "ground_timestamp", "source",
             "tick",
             "accel_x", "accel_y", "accel_z",
             "gyro_x", "gyro_y", "gyro_z",
-            "latitude", "longitude", "gps_altitude",
-            "satellites",
-            "baro_altitude",
-            "pos_z", "vel_z",
             "quat_w", "quat_x", "quat_y", "quat_z",
-            "kalman_pz",
-            "flags", "battery_voltage",
-            "state", "relay", "last_command",
+            "state",
+            "baro_altitude", "pos_z", "vel_z", "kalman_pz",
+            "flags", "relay", "satellites", "last_command",
+            "latitude", "longitude", "gps_altitude",
+            "unix_time", "pressure_pa", "temperature_c",
+            "battery_voltage",
         ]
     }
 
     pub fn csv_values(&self, ground_timestamp_ms: u128) -> Vec<String> {
+        let src = match self.source {
+            TelemetrySource::A => "A",
+            TelemetrySource::B => "B",
+            TelemetrySource::Full => "F",
+        };
         vec![
-            ground_timestamp_ms.to_string(),
+            ground_timestamp_ms.to_string(), src.to_string(),
             self.tick.to_string(),
             self.accel[0].to_string(), self.accel[1].to_string(), self.accel[2].to_string(),
             self.gyro[0].to_string(), self.gyro[1].to_string(), self.gyro[2].to_string(),
-            self.latitude.to_string(), self.longitude.to_string(), self.gps_altitude.to_string(),
-            self.satellites.to_string(),
-            self.baro_altitude.to_string(),
-            self.pos_z.to_string(), self.vel_z.to_string(),
             self.quat[0].to_string(), self.quat[1].to_string(), self.quat[2].to_string(), self.quat[3].to_string(),
-            self.kalman_pz.to_string(),
-            self.flags.to_string(), self.battery_voltage.to_string(),
             (self.state as u8).to_string(),
+            self.baro_altitude.to_string(), self.pos_z.to_string(), self.vel_z.to_string(), self.kalman_pz.to_string(),
+            self.flags.to_string(),
             (self.relay.drogue_fired as u8 | ((self.relay.parachute_fired as u8) << 1)).to_string(),
-            (self.last_command as u8).to_string(),
+            self.satellites.to_string(), (self.last_command as u8).to_string(),
+            self.latitude.to_string(), self.longitude.to_string(), self.gps_altitude.to_string(),
+            self.unix_time.to_string(), self.pressure_pa.to_string(), self.temperature_c.to_string(),
+            self.battery_voltage.to_string(),
         ]
     }
 }

@@ -40,6 +40,7 @@ pub fn spawn(
         let mut poll_interval_ms: u64 = 1000;
         let mut polling_active = false;
         let mut last_poll = Instant::now();
+        let mut next_telem_a = true;
 
         loop {
             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -96,7 +97,9 @@ pub fn spawn(
             if let Some(ref mut p) = port {
                 if polling_active && last_poll.elapsed() >= Duration::from_millis(poll_interval_ms) {
                     last_poll = Instant::now();
-                    let frame = packet::build_command_frame(Command::RequestTelem);
+                    let cmd = if next_telem_a { Command::RequestTelemA } else { Command::RequestTelemB };
+                    next_telem_a = !next_telem_a;
+                    let frame = packet::build_command_frame(cmd);
                     if let Err(e) = std::io::Write::write_all(p.as_mut(), &frame) {
                         let _ = evt_tx.send(SerialEvent::Error(e.to_string()));
                     }

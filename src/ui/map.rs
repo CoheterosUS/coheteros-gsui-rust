@@ -44,6 +44,7 @@ pub fn gps_map(
     ui: &mut egui::Ui,
     current_pos: Option<(f64, f64)>,
     ground_pos: Option<(f64, f64)>,
+    launch_site: Option<(f64, f64)>,
     map_state: &mut MapState,
 ) -> egui::Rect {
     let my_pos = current_pos
@@ -95,6 +96,23 @@ pub fn gps_map(
                     [ground, rocket],
                     egui::Stroke::new(2.0, egui::Color32::RED),
                 );
+
+            }
+
+            if let Some((llat, llon)) = launch_site {
+                let launch = to_pos(projector.project(lat_lon(llat, llon)));
+                painter.line_segment(
+                    [launch, rocket],
+                    egui::Stroke::new(4.0, egui::Color32::BLACK),
+                );
+                painter.line_segment(
+                    [launch, rocket],
+                    egui::Stroke::new(2.0, egui::Color32::GREEN),
+                );
+
+
+                painter.circle_filled(launch, 7.0, egui::Color32::BLACK);
+                painter.circle_filled(launch, 5.0, egui::Color32::GREEN);
             }
 
             painter.circle_filled(rocket, 8.0, egui::Color32::BLACK);

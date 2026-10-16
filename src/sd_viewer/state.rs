@@ -20,7 +20,8 @@ use crate::telemetry::packet::{Command, FlightState};
 use crate::ui::map::MapState;
 
 pub enum BgTaskResult {
-    Loaded(Vec<SdRecord>, String, DataSource),
+    /// Records, flight-start record indices (flash boundary markers), path, source.
+    Loaded(Vec<SdRecord>, Vec<usize>, String, DataSource),
     LoadedCsv(CsvLog, String),
     Exported(String),
     Cancelled,
@@ -252,13 +253,13 @@ impl SdViewerState {
             };
             let sd_records = parse_sd_file_with_progress(&data, Some(&progress));
             if !sd_records.is_empty() {
-                let _ = tx.send(BgTaskResult::Loaded(sd_records, path_owned, DataSource::SdLog));
+                let _ = tx.send(BgTaskResult::Loaded(sd_records, Vec::new(), path_owned, DataSource::SdLog));
                 return;
             }
             progress.store(0, Ordering::Relaxed);
-            let flash_records = parse_flash_file_with_progress(&data, Some(&progress));
+            let (flash_records, flight_starts) = parse_flash_file_with_progress(&data, Some(&progress));
             if !flash_records.is_empty() {
-                let _ = tx.send(BgTaskResult::Loaded(flash_records, path_owned, DataSource::FlashLog));
+                let _ = tx.send(BgTaskResult::Loaded(flash_records, flight_starts, path_owned, DataSource::FlashLog));
                 return;
             }
             let _ = tx.send(BgTaskResult::Error("No valid SD or Flash records found in file".to_string()));
@@ -295,11 +296,21 @@ impl SdViewerState {
         self.bg_receiver = Some(rx);
     }
 
-    fn finish_load(&mut self, records: Vec<SdRecord>, path: String, source: DataSource) {
+    fn finish_load(&mut self, records: Vec<SdRecord>, flight_starts: Vec<usize>, path: String, source: DataSource) {
         self.data_source = source;
         self.extract_series(&records);
         self.build_state_segments(&records);
         self.detect_gaps(&records);
+        for idx in flight_starts {
+            if let Some(r) = records.get(idx) {
+                self.timeline_markers.push(TimelineMarker {
+                    timestamp: r.tick as f64 / TICK_RATE_HZ,
+                    label: "FLIGHT START",
+                    color: egui::Color32::from_rgb(220, 220, 220),
+                    is_command: false,
+                });
+            }
+        }
         if self.has_full_data() {
             self.detect_relay_events(&records);
             self.detect_command_events(&records);
@@ -312,7 +323,7 @@ impl SdViewerState {
 
     fn finish_load_csv(&mut self, log: CsvLog, path: String) {
         self.csv_layout = log.layout;
-        self.finish_load(log.records, path, DataSource::Csv);
+        self.finish_load(log.records, Vec::new(), path, DataSource::Csv);
         // Prefer the baro values stored in the CSV (firmware or previous export) over recomputing.
         if log.layout.baro {
             self.baro_altitude = log.baro_altitude;
@@ -377,7 +388,7 @@ impl SdViewerState {
                 self.bg_start_time = None;
                 self.bg_cancel = None;
                 match result {
-                    BgTaskResult::Loaded(records, path, source) => self.finish_load(records, path, source),
+                    BgTaskResult::Loaded(records, flight_starts, path, source) => self.finish_load(records, flight_starts, path, source),
                     BgTaskResult::LoadedCsv(log, path) => self.finish_load_csv(log, path),
                     BgTaskResult::Exported(path) => {
                         let p = std::path::Path::new(&path);
@@ -652,7 +663,7 @@ impl SdViewerState {
                     Command::Drogue => ("CMD: DROGUE", egui::Color32::from_rgb(255, 165, 0)),
                     Command::Landed => ("CMD: LANDED", egui::Color32::from_rgb(80, 200, 80)),
                     Command::DeepCalibration => ("CMD: DEEP CAL", egui::Color32::from_rgb(160, 120, 200)),
-                    Command::RequestTelem => continue,
+                    Command::RequestTelemA | Command::RequestTelemB => continue,
                     Command::None => unreachable!(),
                 };
                 self.timeline_markers.push(TimelineMarker {

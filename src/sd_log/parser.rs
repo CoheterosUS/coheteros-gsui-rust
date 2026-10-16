@@ -165,13 +165,35 @@ pub fn parse_flash_record(buf: &[u8; FLASH_RECORD_SIZE]) -> Option<SdRecord> {
     })
 }
 
-pub fn parse_flash_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsize>>) -> Vec<SdRecord> {
+/// Flight-boundary marker: State = `0xFF`, sensor fields zero, page-aligned.
+fn is_flash_marker(chunk: &[u8; FLASH_RECORD_SIZE]) -> bool {
+    u16::from_le_bytes([chunk[0], chunk[1]]) == SD_SYNC_WORD
+        && chunk[FLASH_RECORD_SIZE - 2] == FLASH_MARKER_STATE
+        && chunk[FLASH_RECORD_SIZE - 1] == SD_SYNC_END
+}
+
+/// Returns the records plus the record index each flight starts at (from the boundary markers).
+pub fn parse_flash_file_with_progress(
+    data: &[u8],
+    progress: Option<&Arc<AtomicUsize>>,
+) -> (Vec<SdRecord>, Vec<usize>) {
     let mut records = Vec::new();
+    let mut flight_starts = Vec::new();
     let mut offset = 0;
     while offset + FLASH_RECORD_SIZE <= data.len() {
         let chunk: &[u8; FLASH_RECORD_SIZE] = data[offset..offset + FLASH_RECORD_SIZE]
             .try_into()
             .unwrap();
+
+        if is_flash_marker(chunk) {
+            flight_starts.push(records.len());
+            // the marker owns its page; the rest of it is 0xFF padding
+            offset = (offset / FLASH_PAGE_SIZE + 1) * FLASH_PAGE_SIZE;
+            if let Some(p) = progress {
+                p.store(offset.min(data.len()), Ordering::Relaxed);
+            }
+            continue;
+        }
 
         let sync = u16::from_le_bytes([chunk[0], chunk[1]]);
         if sync == SD_SYNC_WORD && chunk[FLASH_RECORD_SIZE - 1] == SD_SYNC_END {
@@ -196,7 +218,7 @@ pub fn parse_flash_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicU
             p.store(offset, Ordering::Relaxed);
         }
     }
-    records
+    (records, flight_starts)
 }
 
 pub fn parse_sd_file_with_progress(data: &[u8], progress: Option<&Arc<AtomicUsize>>) -> Vec<SdRecord> {
@@ -294,6 +316,39 @@ mod tests {
         data.extend_from_slice(&rec);
         let results = parse_sd_file_with_progress(&data, None);
         assert_eq!(results.len(), 3);
+    }
+
+    fn make_flash_record(tick: u32) -> [u8; FLASH_RECORD_SIZE] {
+        let mut buf = [0u8; FLASH_RECORD_SIZE];
+        buf[0] = 0xFE;
+        buf[1] = 0xCA;
+        buf[2..6].copy_from_slice(&tick.to_le_bytes());
+        buf[30] = 0; // state = Idle
+        buf[31] = SD_SYNC_END;
+        buf
+    }
+
+    #[test]
+    fn flash_marker_splits_flights() {
+        let mut data = Vec::new();
+        // flight 1: one page of records
+        for i in 0..8 {
+            data.extend_from_slice(&make_flash_record(i));
+        }
+        // boundary marker: page-aligned, 0xFF padding for the rest of the page
+        let mut marker = make_flash_record(0);
+        marker[30] = FLASH_MARKER_STATE;
+        data.extend_from_slice(&marker);
+        data.extend(std::iter::repeat(0xFF).take(FLASH_PAGE_SIZE - FLASH_RECORD_SIZE));
+        // flight 2
+        for i in 0..8 {
+            data.extend_from_slice(&make_flash_record(100 + i));
+        }
+
+        let (records, flight_starts) = parse_flash_file_with_progress(&data, None);
+        assert_eq!(records.len(), 16);
+        assert_eq!(flight_starts, vec![8]);
+        assert_eq!(records[8].tick, 100);
     }
 
     #[test]

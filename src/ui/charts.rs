@@ -131,3 +131,25 @@ pub fn battery_chart(ui: &mut egui::Ui, state: &AppState) {
             plot_ui.line(Line::new("Battery", pts));
         });
 }
+
+pub fn pressure_chart(ui: &mut egui::Ui, state: &AppState) {
+    let pts: PlotPoints = state.pressure.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
+    telemetry_plot("pressure_plot")
+        .label_formatter(multi_series_formatter(vec![
+            ("Pressure", &state.pressure, "Pa"),
+        ]))
+        .show(ui, |plot_ui| {
+            plot_ui.line(Line::new("Pressure", pts));
+        });
+}
+
+pub fn temperature_chart(ui: &mut egui::Ui, state: &AppState) {
+    let pts: PlotPoints = state.temperature.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
+    telemetry_plot("temperature_plot")
+        .label_formatter(multi_series_formatter(vec![
+            ("Temperature", &state.temperature, "\u{00b0}C"),
+        ]))
+        .show(ui, |plot_ui| {
+            plot_ui.line(Line::new("Temperature", pts));
+        });
+}

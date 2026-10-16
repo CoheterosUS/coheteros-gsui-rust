@@ -2,6 +2,10 @@ use crate::telemetry::packet::{Command, FlightState, PacketField, RelayState};
 
 pub const SD_RECORD_SIZE: usize = 123;
 pub const FLASH_RECORD_SIZE: usize = 32;
+/// Flash is written a page at a time; a flight-boundary marker owns one whole page.
+pub const FLASH_PAGE_SIZE: usize = 256;
+/// State value of a flight-boundary marker record.
+pub const FLASH_MARKER_STATE: u8 = 0xFF;
 pub const SD_SYNC_WORD: u16 = 0xCAFE;
 pub const SD_SYNC_END: u8 = 0xBE;
 pub const GPS_SCALE: f64 = 10_000_000.0;
