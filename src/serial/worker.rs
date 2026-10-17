@@ -22,6 +22,7 @@ pub enum SerialEvent {
     Disconnected,
     Error(String),
     Packet(Box<Telemetry>),
+    PacketLost(u64),
     PortList(Vec<String>),
 }
 
@@ -41,6 +42,11 @@ pub fn spawn(
         let mut polling_active = false;
         let mut last_poll = Instant::now();
         let mut next_telem_a = true;
+        let mut seq_a: u8 = 0;
+        let mut seq_b: u8 = 0;
+        let mut last_recv_seq_a: Option<u8> = None;
+        let mut last_recv_seq_b: Option<u8> = None;
+        let mut packets_lost: u64 = 0;
 
         loop {
             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -54,6 +60,11 @@ pub fn spawn(
                                 port = Some(p);
                                 parser = StreamParser::new();
                                 last_poll = Instant::now();
+                                seq_a = 0;
+                                seq_b = 0;
+                                last_recv_seq_a = None;
+                                last_recv_seq_b = None;
+                                packets_lost = 0;
                                 let _ = evt_tx.send(SerialEvent::Connected(name));
                             }
                             Err(e) => {
@@ -97,9 +108,15 @@ pub fn spawn(
             if let Some(ref mut p) = port {
                 if polling_active && last_poll.elapsed() >= Duration::from_millis(poll_interval_ms) {
                     last_poll = Instant::now();
-                    let cmd = if next_telem_a { Command::RequestTelemA } else { Command::RequestTelemB };
+                    let (cmd, seq) = if next_telem_a {
+                        seq_a = seq_a.wrapping_add(1);
+                        (Command::RequestTelemA, seq_a)
+                    } else {
+                        seq_b = seq_b.wrapping_add(1);
+                        (Command::RequestTelemB, seq_b)
+                    };
                     next_telem_a = !next_telem_a;
-                    let frame = packet::build_command_frame(cmd);
+                    let frame = packet::build_command_frame_with_payload(cmd, &[seq]);
                     if let Err(e) = std::io::Write::write_all(p.as_mut(), &frame) {
                         let _ = evt_tx.send(SerialEvent::Error(e.to_string()));
                     }
@@ -111,6 +128,19 @@ pub fn spawn(
                         Ok(n) if n > 0 => {
                             let packets = parser.feed(&read_buf[..n]);
                             for pkt in packets {
+                                let (last_seq, _sent_seq) = match pkt.source {
+                                    packet::TelemetrySource::A => (&mut last_recv_seq_a, seq_a),
+                                    packet::TelemetrySource::B => (&mut last_recv_seq_b, seq_b),
+                                    _ => (&mut last_recv_seq_a, seq_a),
+                                };
+                                if let Some(prev) = *last_seq {
+                                    let gap = pkt.seq.wrapping_sub(prev).wrapping_sub(1) as u64;
+                                    if gap > 0 && gap < 128 {
+                                        packets_lost += gap;
+                                        let _ = evt_tx.send(SerialEvent::PacketLost(packets_lost));
+                                    }
+                                }
+                                *last_seq = Some(pkt.seq);
                                 let _ = evt_tx.send(SerialEvent::Packet(Box::new(pkt)));
                             }
                             ctx.request_repaint();

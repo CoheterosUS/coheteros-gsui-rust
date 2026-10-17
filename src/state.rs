@@ -8,6 +8,8 @@ const MAX_CONSOLE_ENTRIES: usize = 1000;
 
 pub struct AppState {
     pub latest: Option<Telemetry>,
+    pub latest_raw_a: Option<[u8; packet::PACKET_SIZE]>,
+    pub latest_raw_b: Option<[u8; packet::PACKET_SIZE]>,
     pub baro_altitude: VecDeque<f64>,
     pub gps_altitude: VecDeque<f64>,
     pub pos_z: VecDeque<f64>,
@@ -24,6 +26,7 @@ pub struct AppState {
     pub temperature: VecDeque<f64>,
     pub gps_trail: VecDeque<(f64, f64)>,
     pub packet_count: u64,
+    pub packets_lost: u64,
     pub bytes_received: u64,
     pub throughput_kbps: f64,
     pub packets_per_sec: f64,
@@ -62,6 +65,8 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             latest: None,
+            latest_raw_a: None,
+            latest_raw_b: None,
             baro_altitude: VecDeque::with_capacity(MAX_DATA_POINTS),
             gps_altitude: VecDeque::with_capacity(MAX_DATA_POINTS),
             pos_z: VecDeque::with_capacity(MAX_DATA_POINTS),
@@ -78,6 +83,7 @@ impl AppState {
             temperature: VecDeque::with_capacity(MAX_DATA_POINTS),
             gps_trail: VecDeque::with_capacity(MAX_DATA_POINTS),
             packet_count: 0,
+            packets_lost: 0,
             bytes_received: 0,
             throughput_kbps: 0.0,
             packets_per_sec: 0.0,
@@ -161,6 +167,13 @@ impl AppState {
 
         let accel_mag = (t.accel[0] * t.accel[0] + t.accel[1] * t.accel[1] + t.accel[2] * t.accel[2]).sqrt();
 
+        if is_a {
+            self.latest_raw_a = Some(t.raw);
+        }
+        if is_b {
+            self.latest_raw_b = Some(t.raw);
+        }
+
         // Merge into latest: only overwrite fields that this packet carries
         let merged = if let Some(mut prev) = self.latest.take() {
             // Shared: always update
@@ -240,6 +253,8 @@ impl AppState {
 
     pub fn clear_data(&mut self) {
         self.latest = None;
+        self.latest_raw_a = None;
+        self.latest_raw_b = None;
         self.baro_altitude.clear();
         self.gps_altitude.clear();
         self.pos_z.clear();
@@ -256,6 +271,7 @@ impl AppState {
         self.temperature.clear();
         self.gps_trail.clear();
         self.packet_count = 0;
+        self.packets_lost = 0;
         self.bytes_received = 0;
         self.throughput_kbps = 0.0;
         self.packets_per_sec = 0.0;

@@ -3,9 +3,9 @@ use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 
 use crate::state::AppState;
 
-fn telemetry_plot(id: &str) -> Plot<'_> {
+fn telemetry_plot(id: &str, height: f32) -> Plot<'_> {
     Plot::new(id)
-        .height(150.0)
+        .height(height)
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
@@ -37,10 +37,10 @@ fn multi_series_formatter<'a>(
     }
 }
 
-pub fn altitude_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn altitude_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let baro: PlotPoints = state.baro_altitude.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let gps: PlotPoints = state.gps_altitude.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("altitude_plot")
+    telemetry_plot("altitude_plot", height)
         .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(multi_series_formatter(vec![
             ("Barometric", &state.baro_altitude, "m"),
@@ -52,11 +52,11 @@ pub fn altitude_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn acceleration_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn acceleration_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let x: PlotPoints = state.accel_x.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let y: PlotPoints = state.accel_y.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let z: PlotPoints = state.accel_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("accel_plot")
+    telemetry_plot("accel_plot", height)
         .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(multi_series_formatter(vec![
             ("Accel X", &state.accel_x, "m/s\u{00b2}"),
@@ -70,11 +70,11 @@ pub fn acceleration_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn gyroscope_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn gyroscope_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let x: PlotPoints = state.gyro_x.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let y: PlotPoints = state.gyro_y.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     let z: PlotPoints = state.gyro_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("gyro_plot")
+    telemetry_plot("gyro_plot", height)
         .legend(Legend::default().position(Corner::LeftTop))
         .label_formatter(multi_series_formatter(vec![
             ("Gyro X", &state.gyro_x, "\u{00b0}/s"),
@@ -88,9 +88,9 @@ pub fn gyroscope_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn pos_z_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn pos_z_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.pos_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("pos_z_plot")
+    telemetry_plot("pos_z_plot", height)
         .label_formatter(multi_series_formatter(vec![
             ("Pos Z", &state.pos_z, "m"),
         ]))
@@ -99,9 +99,9 @@ pub fn pos_z_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn vel_z_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn vel_z_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.vel_z.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("vel_z_plot")
+    telemetry_plot("vel_z_plot", height)
         .label_formatter(multi_series_formatter(vec![
             ("Vel Z", &state.vel_z, "m/s"),
         ]))
@@ -110,9 +110,9 @@ pub fn vel_z_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn kalman_pz_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn kalman_pz_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.kalman_pz.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("kalman_pz_plot")
+    telemetry_plot("kalman_pz_plot", height)
         .label_formatter(multi_series_formatter(vec![
             ("1\u{03c3}", &state.kalman_pz, "m"),
         ]))
@@ -121,9 +121,9 @@ pub fn kalman_pz_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn battery_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn battery_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.battery.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("battery_plot")
+    telemetry_plot("battery_plot", height)
         .label_formatter(multi_series_formatter(vec![
             ("Battery", &state.battery, "V"),
         ]))
@@ -132,9 +132,9 @@ pub fn battery_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn pressure_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn pressure_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.pressure.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("pressure_plot")
+    telemetry_plot("pressure_plot", height)
         .label_formatter(multi_series_formatter(vec![
             ("Pressure", &state.pressure, "Pa"),
         ]))
@@ -143,9 +143,9 @@ pub fn pressure_chart(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
-pub fn temperature_chart(ui: &mut egui::Ui, state: &AppState) {
+pub fn temperature_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.temperature.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
-    telemetry_plot("temperature_plot")
+    telemetry_plot("temperature_plot", height)
         .label_formatter(multi_series_formatter(vec![
             ("Temperature", &state.temperature, "\u{00b0}C"),
         ]))

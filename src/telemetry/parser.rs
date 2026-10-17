@@ -89,6 +89,7 @@ fn default_telemetry(raw: [u8; PACKET_SIZE]) -> Telemetry {
     Telemetry {
         raw,
         source: TelemetrySource::A,
+        seq: 0,
         tick: 0,
         accel: [0.0; 3],
         gyro: [0.0; 3],
@@ -121,7 +122,6 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
         return None;
     }
 
-    // LEN counts everything between the 4-byte header and the footer: 0x30 (48)
     if buf[3] as usize != PACKET_SIZE - 5 {
         return None;
     }
@@ -136,7 +136,8 @@ pub fn parse_packet(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
 
 fn parse_telem_a(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
     let mut r = PacketReader::new(buf);
-    r.pos = 4; // skip sync + cmd + len
+    r.pos = 4;
+    let seq = r.u8();
     let (tick, accel, gyro, quat, state) = parse_shared(&mut r)?;
 
     let baro_altitude = r.f32_le();
@@ -150,6 +151,7 @@ fn parse_telem_a(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
 
     let mut t = default_telemetry(*buf);
     t.source = TelemetrySource::A;
+    t.seq = seq;
     t.tick = tick;
     t.accel = accel;
     t.gyro = gyro;
@@ -168,7 +170,8 @@ fn parse_telem_a(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
 
 fn parse_telem_b(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
     let mut r = PacketReader::new(buf);
-    r.pos = 4; // skip sync + cmd + len
+    r.pos = 4;
+    let seq = r.u8();
     let (tick, accel, gyro, quat, state) = parse_shared(&mut r)?;
 
     let latitude = r.i32_le() as f64 / GPS_SCALE;
@@ -181,6 +184,7 @@ fn parse_telem_b(buf: &[u8; PACKET_SIZE]) -> Option<Telemetry> {
 
     let mut t = default_telemetry(*buf);
     t.source = TelemetrySource::B;
+    t.seq = seq;
     t.tick = tick;
     t.accel = accel;
     t.gyro = gyro;
@@ -249,32 +253,22 @@ mod tests {
 
     fn make_telem_a_packet() -> [u8; PACKET_SIZE] {
         let mut buf = [0u8; PACKET_SIZE];
-        buf[0] = 0xFE; // sync LSB
-        buf[1] = 0xCA; // sync MSB
-        buf[2] = 0x80; // CMD = TELEM_A
-        buf[3] = 0x30; // LEN = 48
-        // tick at offset 4
-        buf[4..8].copy_from_slice(&1000u32.to_le_bytes());
-        // accel x at offset 8 (value 9.00 m/s² → 900)
-        buf[8..10].copy_from_slice(&900i16.to_le_bytes());
-        // state at offset 28
-        buf[28] = 0; // IDLE
-        // baro_altitude at offset 29 (float32)
-        buf[29..33].copy_from_slice(&150.0f32.to_le_bytes());
-        // pos_z at offset 33 (float32)
-        buf[33..37].copy_from_slice(&(-250.0f32).to_le_bytes());
-        // vel_z at offset 37 (float32)
-        buf[37..41].copy_from_slice(&(-12.5f32).to_le_bytes());
-        // kalman_pz at offset 41 (float32)
-        buf[41..45].copy_from_slice(&2.25f32.to_le_bytes());
-        // flags at offset 45
-        buf[45..49].copy_from_slice(&0u32.to_le_bytes());
-        // relay at offset 49
-        buf[49] = 0;
-        // satellites at offset 50
-        buf[50] = 7;
-        // last_command at offset 51
-        buf[51] = 0;
+        buf[0] = 0xFE;
+        buf[1] = 0xCA;
+        buf[2] = 0x80;
+        buf[3] = 0x31; // LEN = 49
+        buf[4] = 42;   // SEQ
+        buf[5..9].copy_from_slice(&1000u32.to_le_bytes());
+        buf[9..11].copy_from_slice(&900i16.to_le_bytes());
+        buf[29] = 0; // state = IDLE
+        buf[30..34].copy_from_slice(&150.0f32.to_le_bytes());
+        buf[34..38].copy_from_slice(&(-250.0f32).to_le_bytes());
+        buf[38..42].copy_from_slice(&(-12.5f32).to_le_bytes());
+        buf[42..46].copy_from_slice(&2.25f32.to_le_bytes());
+        buf[46..50].copy_from_slice(&0u32.to_le_bytes());
+        buf[50] = 0;  // relay
+        buf[51] = 7;  // satellites
+        buf[52] = 0;  // last_command
         buf[PACKET_SIZE - 1] = SYNC_END;
         buf
     }
@@ -283,25 +277,18 @@ mod tests {
         let mut buf = [0u8; PACKET_SIZE];
         buf[0] = 0xFE;
         buf[1] = 0xCA;
-        buf[2] = 0x81; // CMD = TELEM_B
-        buf[3] = 0x30; // LEN = 48
-        buf[4..8].copy_from_slice(&2000u32.to_le_bytes());
-        // state at offset 28
-        buf[28] = 0;
-        // latitude at offset 29 (37.3891 * 10^7)
-        buf[29..33].copy_from_slice(&373891000i32.to_le_bytes());
-        // longitude at offset 33
-        buf[33..37].copy_from_slice(&(-59845000i32).to_le_bytes());
-        // gps_altitude at offset 37
-        buf[37..41].copy_from_slice(&100.5f32.to_le_bytes());
-        // unix_time at offset 41
-        buf[41..45].copy_from_slice(&1700000000u32.to_le_bytes());
-        // pressure_pa at offset 45
-        buf[45..49].copy_from_slice(&101325.0f32.to_le_bytes());
-        // temperature_c at offset 49 (x100, 25.50°C → 2550)
-        buf[49..51].copy_from_slice(&2550i16.to_le_bytes());
-        // battery at offset 51 (x10, 12.3V → 123)
-        buf[51] = 123;
+        buf[2] = 0x81;
+        buf[3] = 0x31; // LEN = 49
+        buf[4] = 7;    // SEQ
+        buf[5..9].copy_from_slice(&2000u32.to_le_bytes());
+        buf[29] = 0; // state = IDLE
+        buf[30..34].copy_from_slice(&373891000i32.to_le_bytes());
+        buf[34..38].copy_from_slice(&(-59845000i32).to_le_bytes());
+        buf[38..42].copy_from_slice(&100.5f32.to_le_bytes());
+        buf[42..46].copy_from_slice(&1700000000u32.to_le_bytes());
+        buf[46..50].copy_from_slice(&101325.0f32.to_le_bytes());
+        buf[50..52].copy_from_slice(&2550i16.to_le_bytes());
+        buf[52] = 123; // battery
         buf[PACKET_SIZE - 1] = SYNC_END;
         buf
     }
@@ -311,6 +298,7 @@ mod tests {
         let buf = make_telem_a_packet();
         let t = parse_packet(&buf).unwrap();
         assert_eq!(t.source, TelemetrySource::A);
+        assert_eq!(t.seq, 42);
         assert_eq!(t.tick, 1000);
         assert!((t.accel[0] - 9.0).abs() < 0.01);
         assert_eq!(t.state, FlightState::Idle);
@@ -326,6 +314,7 @@ mod tests {
         let buf = make_telem_b_packet();
         let t = parse_packet(&buf).unwrap();
         assert_eq!(t.source, TelemetrySource::B);
+        assert_eq!(t.seq, 7);
         assert_eq!(t.tick, 2000);
         assert!((t.latitude - 37.3891).abs() < 0.0001);
         assert!((t.longitude - (-5.9845)).abs() < 0.0001);
@@ -353,7 +342,7 @@ mod tests {
     #[test]
     fn reject_bad_len() {
         let mut buf = make_telem_a_packet();
-        buf[3] = 0x2C;
+        buf[3] = 0x30;
         assert!(parse_packet(&buf).is_none());
     }
 

@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub const PACKET_SIZE: usize = 53;
+pub const PACKET_SIZE: usize = 54;
 pub const SYNC_WORD: u16 = 0xCAFE;
 pub const SYNC_END: u8 = 0xBE;
 pub const ACCEL_SCALE: f64 = 100.0;
@@ -212,67 +212,63 @@ pub const PACKET_FIELDS_A: &[PacketField] = &[
     PacketField { name: "SYNC",      offset: 0,  length: 2, color: [255, 255, 255] },
     PacketField { name: "CMD",       offset: 2,  length: 1, color: [180, 180, 255] },
     PacketField { name: "LEN",       offset: 3,  length: 1, color: [180, 180, 255] },
-    PacketField { name: "TICK",      offset: 4,  length: 4, color: [100, 200, 255] },
-    PacketField { name: "ACCEL X",   offset: 8,  length: 2, color: [255, 100, 100] },
-    PacketField { name: "ACCEL Y",   offset: 10, length: 2, color: [255, 130, 100] },
-    PacketField { name: "ACCEL Z",   offset: 12, length: 2, color: [255, 160, 100] },
-    PacketField { name: "GYRO X",    offset: 14, length: 2, color: [100, 255, 100] },
-    PacketField { name: "GYRO Y",    offset: 16, length: 2, color: [130, 255, 100] },
-    PacketField { name: "GYRO Z",    offset: 18, length: 2, color: [160, 255, 100] },
-    PacketField { name: "QUAT W",    offset: 20, length: 2, color: [180, 180, 255] },
-    PacketField { name: "QUAT X",    offset: 22, length: 2, color: [200, 180, 255] },
-    PacketField { name: "QUAT Y",    offset: 24, length: 2, color: [220, 180, 255] },
-    PacketField { name: "QUAT Z",    offset: 26, length: 2, color: [240, 180, 255] },
-    PacketField { name: "STATE",     offset: 28, length: 1, color: [0, 200, 255] },
-    PacketField { name: "BARO ALT",  offset: 29, length: 4, color: [255, 100, 200] },
-    PacketField { name: "POS Z",     offset: 33, length: 4, color: [180, 255, 220] },
-    PacketField { name: "VEL Z",     offset: 37, length: 4, color: [255, 220, 180] },
-    PacketField { name: "KALMAN PZ", offset: 41, length: 4, color: [120, 220, 240] },
-    PacketField { name: "FLAGS",     offset: 45, length: 4, color: [255, 80, 80] },
-    PacketField { name: "RELAY",     offset: 49, length: 1, color: [255, 165, 0] },
-    PacketField { name: "SATS",      offset: 50, length: 1, color: [140, 255, 200] },
-    PacketField { name: "LAST CMD",  offset: 51, length: 1, color: [180, 180, 255] },
-    PacketField { name: "SYNC END",  offset: 52, length: 1, color: [255, 255, 255] },
+    PacketField { name: "SEQ",       offset: 4,  length: 1, color: [255, 200, 0] },
+    PacketField { name: "TICK",      offset: 5,  length: 4, color: [100, 200, 255] },
+    PacketField { name: "ACCEL X",   offset: 9,  length: 2, color: [255, 100, 100] },
+    PacketField { name: "ACCEL Y",   offset: 11, length: 2, color: [255, 130, 100] },
+    PacketField { name: "ACCEL Z",   offset: 13, length: 2, color: [255, 160, 100] },
+    PacketField { name: "GYRO X",    offset: 15, length: 2, color: [100, 255, 100] },
+    PacketField { name: "GYRO Y",    offset: 17, length: 2, color: [130, 255, 100] },
+    PacketField { name: "GYRO Z",    offset: 19, length: 2, color: [160, 255, 100] },
+    PacketField { name: "QUAT W",    offset: 21, length: 2, color: [180, 180, 255] },
+    PacketField { name: "QUAT X",    offset: 23, length: 2, color: [200, 180, 255] },
+    PacketField { name: "QUAT Y",    offset: 25, length: 2, color: [220, 180, 255] },
+    PacketField { name: "QUAT Z",    offset: 27, length: 2, color: [240, 180, 255] },
+    PacketField { name: "STATE",     offset: 29, length: 1, color: [0, 200, 255] },
+    PacketField { name: "BARO ALT",  offset: 30, length: 4, color: [255, 100, 200] },
+    PacketField { name: "POS Z",     offset: 34, length: 4, color: [180, 255, 220] },
+    PacketField { name: "VEL Z",     offset: 38, length: 4, color: [255, 220, 180] },
+    PacketField { name: "KALMAN PZ", offset: 42, length: 4, color: [120, 220, 240] },
+    PacketField { name: "FLAGS",     offset: 46, length: 4, color: [255, 80, 80] },
+    PacketField { name: "RELAY",     offset: 50, length: 1, color: [255, 165, 0] },
+    PacketField { name: "SATS",      offset: 51, length: 1, color: [140, 255, 200] },
+    PacketField { name: "LAST CMD",  offset: 52, length: 1, color: [180, 180, 255] },
+    PacketField { name: "SYNC END",  offset: 53, length: 1, color: [255, 255, 255] },
 ];
 
 pub const PACKET_FIELDS_B: &[PacketField] = &[
     PacketField { name: "SYNC",      offset: 0,  length: 2, color: [255, 255, 255] },
     PacketField { name: "CMD",       offset: 2,  length: 1, color: [180, 180, 255] },
     PacketField { name: "LEN",       offset: 3,  length: 1, color: [180, 180, 255] },
-    PacketField { name: "TICK",      offset: 4,  length: 4, color: [100, 200, 255] },
-    PacketField { name: "ACCEL X",   offset: 8,  length: 2, color: [255, 100, 100] },
-    PacketField { name: "ACCEL Y",   offset: 10, length: 2, color: [255, 130, 100] },
-    PacketField { name: "ACCEL Z",   offset: 12, length: 2, color: [255, 160, 100] },
-    PacketField { name: "GYRO X",    offset: 14, length: 2, color: [100, 255, 100] },
-    PacketField { name: "GYRO Y",    offset: 16, length: 2, color: [130, 255, 100] },
-    PacketField { name: "GYRO Z",    offset: 18, length: 2, color: [160, 255, 100] },
-    PacketField { name: "QUAT W",    offset: 20, length: 2, color: [180, 180, 255] },
-    PacketField { name: "QUAT X",    offset: 22, length: 2, color: [200, 180, 255] },
-    PacketField { name: "QUAT Y",    offset: 24, length: 2, color: [220, 180, 255] },
-    PacketField { name: "QUAT Z",    offset: 26, length: 2, color: [240, 180, 255] },
-    PacketField { name: "STATE",     offset: 28, length: 1, color: [0, 200, 255] },
-    PacketField { name: "LAT",       offset: 29, length: 4, color: [50, 200, 200] },
-    PacketField { name: "LON",       offset: 33, length: 4, color: [80, 220, 200] },
-    PacketField { name: "GPS ALT",   offset: 37, length: 4, color: [110, 240, 200] },
-    PacketField { name: "UNIX TIME", offset: 41, length: 4, color: [200, 200, 100] },
-    PacketField { name: "PRESSURE",  offset: 45, length: 4, color: [200, 150, 255] },
-    PacketField { name: "TEMP",      offset: 49, length: 2, color: [255, 200, 100] },
-    PacketField { name: "BATTERY",   offset: 51, length: 1, color: [255, 255, 0] },
-    PacketField { name: "SYNC END",  offset: 52, length: 1, color: [255, 255, 255] },
+    PacketField { name: "SEQ",       offset: 4,  length: 1, color: [255, 200, 0] },
+    PacketField { name: "TICK",      offset: 5,  length: 4, color: [100, 200, 255] },
+    PacketField { name: "ACCEL X",   offset: 9,  length: 2, color: [255, 100, 100] },
+    PacketField { name: "ACCEL Y",   offset: 11, length: 2, color: [255, 130, 100] },
+    PacketField { name: "ACCEL Z",   offset: 13, length: 2, color: [255, 160, 100] },
+    PacketField { name: "GYRO X",    offset: 15, length: 2, color: [100, 255, 100] },
+    PacketField { name: "GYRO Y",    offset: 17, length: 2, color: [130, 255, 100] },
+    PacketField { name: "GYRO Z",    offset: 19, length: 2, color: [160, 255, 100] },
+    PacketField { name: "QUAT W",    offset: 21, length: 2, color: [180, 180, 255] },
+    PacketField { name: "QUAT X",    offset: 23, length: 2, color: [200, 180, 255] },
+    PacketField { name: "QUAT Y",    offset: 25, length: 2, color: [220, 180, 255] },
+    PacketField { name: "QUAT Z",    offset: 27, length: 2, color: [240, 180, 255] },
+    PacketField { name: "STATE",     offset: 29, length: 1, color: [0, 200, 255] },
+    PacketField { name: "LAT",       offset: 30, length: 4, color: [50, 200, 200] },
+    PacketField { name: "LON",       offset: 34, length: 4, color: [80, 220, 200] },
+    PacketField { name: "GPS ALT",   offset: 38, length: 4, color: [110, 240, 200] },
+    PacketField { name: "UNIX TIME", offset: 42, length: 4, color: [200, 200, 100] },
+    PacketField { name: "PRESSURE",  offset: 46, length: 4, color: [200, 150, 255] },
+    PacketField { name: "TEMP",      offset: 50, length: 2, color: [255, 200, 100] },
+    PacketField { name: "BATTERY",   offset: 52, length: 1, color: [255, 255, 0] },
+    PacketField { name: "SYNC END",  offset: 53, length: 1, color: [255, 255, 255] },
 ];
 
-pub fn packet_fields_for(source: TelemetrySource) -> &'static [PacketField] {
-    match source {
-        TelemetrySource::A => PACKET_FIELDS_A,
-        TelemetrySource::B => PACKET_FIELDS_B,
-        TelemetrySource::Full => PACKET_FIELDS_A,
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Telemetry {
     pub raw: [u8; PACKET_SIZE],
     pub source: TelemetrySource,
+    pub seq: u8,
     pub tick: u32,
     pub accel: [f64; 3],
     pub gyro: [f64; 3],
@@ -300,7 +296,7 @@ pub struct Telemetry {
 impl Telemetry {
     pub fn csv_header() -> &'static [&'static str] {
         &[
-            "ground_timestamp", "source",
+            "ground_timestamp", "source", "seq",
             "tick",
             "accel_x", "accel_y", "accel_z",
             "gyro_x", "gyro_y", "gyro_z",
@@ -321,7 +317,7 @@ impl Telemetry {
             TelemetrySource::Full => "F",
         };
         vec![
-            ground_timestamp_ms.to_string(), src.to_string(),
+            ground_timestamp_ms.to_string(), src.to_string(), self.seq.to_string(),
             self.tick.to_string(),
             self.accel[0].to_string(), self.accel[1].to_string(), self.accel[2].to_string(),
             self.gyro[0].to_string(), self.gyro[1].to_string(), self.gyro[2].to_string(),

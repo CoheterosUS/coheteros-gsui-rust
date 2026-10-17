@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Receiver, Sender};
@@ -34,6 +35,7 @@ pub struct GroundStationApp {
     controls_open: bool,
     map_detached: bool,
     quat_detached: bool,
+    detached_charts: HashSet<String>,
     logo_texture: Option<egui::TextureHandle>,
     active_tab: ActiveTab,
     sd_viewer: SdViewerState,
@@ -75,6 +77,7 @@ impl GroundStationApp {
             controls_open: false,
             map_detached: false,
             quat_detached: false,
+            detached_charts: HashSet::new(),
             logo_texture,
             active_tab: ActiveTab::LiveTelemetry,
             sd_viewer: SdViewerState::new(),
@@ -103,6 +106,12 @@ impl GroundStationApp {
                 ui.colored_label(color, status);
                 ui.separator();
                 ui.label(format!("PACKETS: {}", self.state.packet_count));
+                ui.separator();
+                if self.state.packets_lost > 0 {
+                    ui.colored_label(tc.red_accent, format!("LOST: {}", self.state.packets_lost));
+                } else {
+                    ui.label("LOST: 0");
+                }
                 ui.separator();
                 ui.label(format!("{:.0} B/s", self.state.throughput_kbps));
                 ui.separator();
@@ -292,45 +301,40 @@ impl GroundStationApp {
 
                 ui.add_space(4.0);
 
+            let state = &self.state;
+            let detached = &mut self.detached_charts;
+            let quat_detached = &mut self.quat_detached;
+
             egui::ScrollArea::vertical().show(ui, |ui| {
-                theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
-                    ui::charts::altitude_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
-                    ui::charts::acceleration_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
-                    ui::charts::gyroscope_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "POS Z (KALMAN)", tc.accent, dm, |ui| {
-                    ui::charts::pos_z_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "VEL Z (KALMAN)", tc.accent, dm, |ui| {
-                    ui::charts::vel_z_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "POS Z UNCERTAINTY (1\u{03c3})", tc.accent, dm, |ui| {
-                    ui::charts::kalman_pz_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
-                    ui::charts::battery_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
-                    ui::charts::pressure_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
-                    ui::charts::temperature_chart(ui, &self.state);
-                });
-                ui.add_space(4.0);
-                if !self.quat_detached {
-                    let quat_detached = &mut self.quat_detached;
+                let charts: &[(&str, fn(&mut egui::Ui, &AppState, f32))] = &[
+                    ("ALTITUDE", ui::charts::altitude_chart as fn(&mut egui::Ui, &AppState, f32)),
+                    ("ACCELERATION", ui::charts::acceleration_chart),
+                    ("GYROSCOPE", ui::charts::gyroscope_chart),
+                    ("POS Z (KALMAN)", ui::charts::pos_z_chart),
+                    ("VEL Z (KALMAN)", ui::charts::vel_z_chart),
+                    ("POS Z UNCERTAINTY (1\u{03c3})", ui::charts::kalman_pz_chart),
+                    ("BATTERY", ui::charts::battery_chart),
+                    ("PRESSURE", ui::charts::pressure_chart),
+                    ("TEMPERATURE", ui::charts::temperature_chart),
+                ];
+
+                for &(name, chart_fn) in charts {
+                    if !detached.contains(name) {
+                        theme::bordered_section(ui, name, tc.accent, dm, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button("DETACH").clicked() {
+                                        detached.insert(name.to_string());
+                                    }
+                                });
+                            });
+                            chart_fn(ui, state, 150.0);
+                        });
+                        ui.add_space(4.0);
+                    }
+                }
+
+                if !*quat_detached {
                     theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
                         ui.horizontal(|ui| {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -350,11 +354,27 @@ impl GroundStationApp {
                 }
 
                 ui.add_space(4.0);
-                theme::bordered_section(ui, "RAW PACKET", tc.accent, dm, |ui| {
-                    if let Some(ref t) = t {
-                        ui::hex_viewer::hex_viewer(ui, &t.raw, packet::packet_fields_for(t.source), dm);
-                    } else {
+                theme::bordered_section(ui, "RAW PACKETS", tc.accent, dm, |ui| {
+                    let has_a = state.latest_raw_a.is_some();
+                    let has_b = state.latest_raw_b.is_some();
+                    if !has_a && !has_b {
                         ui.label(egui::RichText::new("NO DATA").color(tc.label_color));
+                        return;
+                    }
+                    if let Some(ref raw_a) = state.latest_raw_a {
+                        ui.label(egui::RichText::new("PACKET A").color(tc.label_color).strong());
+                        ui.push_id("raw_a", |ui| {
+                            ui::hex_viewer::hex_viewer(ui, raw_a, packet::PACKET_FIELDS_A, dm);
+                        });
+                    }
+                    if has_a && has_b {
+                        ui.add_space(8.0);
+                    }
+                    if let Some(ref raw_b) = state.latest_raw_b {
+                        ui.label(egui::RichText::new("PACKET B").color(tc.label_color).strong());
+                        ui.push_id("raw_b", |ui| {
+                            ui::hex_viewer::hex_viewer(ui, raw_b, packet::PACKET_FIELDS_B, dm);
+                        });
                     }
                 });
 
@@ -919,6 +939,9 @@ impl eframe::App for GroundStationApp {
                     self.state.polling_active = false;
                     self.state.push_message("Disconnected");
                 }
+                SerialEvent::PacketLost(total) => {
+                    self.state.packets_lost = total;
+                }
                 SerialEvent::Error(e) => {
                     self.state.push_message(&e);
                 }
@@ -995,6 +1018,7 @@ impl eframe::App for GroundStationApp {
                 self.state.push_telemetry(packet::Telemetry {
                     raw: [0u8; packet::PACKET_SIZE],
                     source: packet::TelemetrySource::Full,
+                    seq: i as u8,
                     tick: (i as u32) * 100,
                     accel: [ax, ay, az],
                     gyro: [gx, gy, gz],
@@ -1118,6 +1142,46 @@ impl eframe::App for GroundStationApp {
         }
         if self.quat_detached {
             self.render_quat_viewport(root_ui.ctx());
+        }
+
+        {
+            let detached_names: Vec<String> = self.detached_charts.iter().cloned().collect();
+            for name in detached_names {
+                let chart_fn: fn(&mut egui::Ui, &AppState, f32) = match name.as_str() {
+                    "ALTITUDE" => ui::charts::altitude_chart,
+                    "ACCELERATION" => ui::charts::acceleration_chart,
+                    "GYROSCOPE" => ui::charts::gyroscope_chart,
+                    "POS Z (KALMAN)" => ui::charts::pos_z_chart,
+                    "VEL Z (KALMAN)" => ui::charts::vel_z_chart,
+                    "POS Z UNCERTAINTY (1\u{03c3})" => ui::charts::kalman_pz_chart,
+                    "BATTERY" => ui::charts::battery_chart,
+                    "PRESSURE" => ui::charts::pressure_chart,
+                    "TEMPERATURE" => ui::charts::temperature_chart,
+                    _ => continue,
+                };
+                let dm = self.state.dark_mode;
+                let tc = theme::current_theme(dm);
+                let state = &self.state;
+                let detached = &mut self.detached_charts;
+
+                root_ui.ctx().show_viewport_immediate(
+                    egui::ViewportId::from_hash_of(name.as_str()),
+                    egui::ViewportBuilder::default()
+                        .with_title(format!("{} \u{2014} Coheteros GS", name))
+                        .with_inner_size([600.0, 250.0]),
+                    |ctx, _class| {
+                        theme::apply_visuals(ctx, dm);
+                        if ctx.input(|i| i.viewport().close_requested()) {
+                            detached.remove(&name);
+                        }
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(8.0))
+                            .show(ctx, |ui| {
+                                chart_fn(ui, state, ui.available_height());
+                            });
+                    },
+                );
+            }
         }
 
         match self.active_tab {
