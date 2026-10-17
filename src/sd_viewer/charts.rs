@@ -230,8 +230,12 @@ pub fn quaternion_orientation_viewer(
     let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
     let center = response.rect.center();
 
+    let body_rgb = if dark_mode { 185.0 } else { 150.0 };
     let body_color = if dark_mode { egui::Color32::from_rgb(180, 180, 180) } else { egui::Color32::from_rgb(60, 60, 60) };
     let fin_color = if dark_mode { egui::Color32::from_rgb(100, 100, 100) } else { egui::Color32::from_rgb(120, 120, 120) };
+    // wireframe rocket by default; toggle button (drawn last) switches to the STL mesh
+    let stl_id = response.id.with("stl");
+    let show_stl = ui.data(|d| d.get_temp::<bool>(stl_id).unwrap_or(false));
     let ref_color = if dark_mode { egui::Color32::from_rgb(45, 45, 45) } else { egui::Color32::from_rgb(205, 205, 205) };
     let label_color = if dark_mode { egui::Color32::from_rgb(90, 90, 90) } else { egui::Color32::from_rgb(150, 150, 150) };
     let ax_n = egui::Color32::from_rgb(200, 70, 70);
@@ -355,60 +359,101 @@ pub fn quaternion_orientation_viewer(
         }
     }
 
-    // rocket wireframe: longitudinal axis = body +X (PROTOCOL: pitch is angle of this axis above horizontal)
-    let nose = rot(1.0, 0.0, 0.0);
-    let br = 0.12;
-    let bt_x = 0.5;
-    let bb_x = -0.3;
-    let fin_x = -0.45;
-    let fin_r = 0.3;
-    let ring: [(f64, f64); 8] = {
-        let mut v = [(0.0, 0.0); 8];
-        for (i, s) in v.iter_mut().enumerate() {
+    // longitudinal axis = body +X (PROTOCOL: pitch is angle of this axis above horizontal)
+    let mut tris: Vec<(f64, [egui::Pos2; 3], egui::Color32)> = Vec::new();
+    if !show_stl {
+        let nose = rot(1.0, 0.0, 0.0);
+        let br = 0.12;
+        let bt_x = 0.5;
+        let bb_x = -0.3;
+        let fin_x = -0.45;
+        let fin_r = 0.3;
+        let ring: [(f64, f64); 8] = std::array::from_fn(|i| {
             let a = std::f64::consts::TAU * i as f64 / 8.0;
-            *s = (br * a.cos(), br * a.sin());
+            (br * a.cos(), br * a.sin())
+        });
+        let bt: Vec<_> = ring.iter().map(|&(cy, cz)| rot(bt_x, cy, cz)).collect();
+        let bb: Vec<_> = ring.iter().map(|&(cy, cz)| rot(bb_x, cy, cz)).collect();
+        let fin_dirs: [(f64, f64); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
+        let ft: Vec<_> = fin_dirs.iter().map(|&(dy, dz)| rot(fin_x, fin_r * dy, fin_r * dz)).collect();
+        let fin_root: Vec<_> = fin_dirs.iter().map(|&(dy, dz)| rot(bb_x, br * dy, br * dz)).collect();
+        let fin_base: Vec<_> = fin_dirs.iter().map(|&(dy, dz)| rot(fin_x, br * dy, br * dz)).collect();
+
+        let body_s = egui::Stroke::new(1.8, body_color);
+        let fin_s = egui::Stroke::new(1.5, fin_color);
+
+        for i in 0..8 {
+            let j = (i + 1) % 8;
+            segs.extend(seg(nose, bt[i], body_s));
+            segs.extend(seg(bt[i], bt[j], body_s));
+            segs.extend(seg(bb[i], bb[j], body_s));
+            segs.extend(seg(bt[i], bb[i], body_s));
         }
-        v
-    };
-    let bt: Vec<_> = ring.iter().map(|&(cy, cz)| rot(bt_x, cy, cz)).collect();
-    let bb: Vec<_> = ring.iter().map(|&(cy, cz)| rot(bb_x, cy, cz)).collect();
-    let fin_dirs: [(f64, f64); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
-    let ft: Vec<_> = fin_dirs.iter().map(|&(dy, dz)| rot(fin_x, fin_r * dy, fin_r * dz)).collect();
-    let fin_root: Vec<_> = fin_dirs.iter().map(|&(dy, dz)| rot(bb_x, br * dy, br * dz)).collect();
-    let fin_base: Vec<_> = fin_dirs.iter().map(|&(dy, dz)| rot(fin_x, br * dy, br * dz)).collect();
-
-    let body_s = egui::Stroke::new(1.8, body_color);
-    let fin_s = egui::Stroke::new(1.5, fin_color);
-
-    for i in 0..8 {
-        let j = (i + 1) % 8;
-        segs.extend(seg(nose, bt[i], body_s));
-        segs.extend(seg(bt[i], bt[j], body_s));
-        segs.extend(seg(bb[i], bb[j], body_s));
-        segs.extend(seg(bt[i], bb[i], body_s));
+        for i in 0..4 {
+            segs.extend(seg(fin_root[i], ft[i], fin_s));
+            segs.extend(seg(ft[i], fin_base[i], fin_s));
+            segs.extend(seg(fin_base[i], fin_root[i], fin_s));
+        }
+    } else {
+        // STL mesh: flat-shaded with a headlight from upper-left of the camera, back faces culled
+        let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let light = {
+            let l = [0, 1, 2].map(|k| -fwd[k] + 0.6 * up[k] - 0.4 * right[k]);
+            let n = dot(l, l).sqrt();
+            l.map(|v| v / n)
+        };
+        for t in rocket_mesh() {
+            let [a, b, c] = t.map(|p| rot(p[0], p[1], p[2]));
+            let (e1, e2) = (sub(b, a), sub(c, a));
+            let nrm = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            if dot(nrm, sub(cam, a)) <= 0.0 { continue; }
+            let ((pa, za), (pb, zb), (pc, zc)) = (project(a), project(b), project(c));
+            if za < 0.05 || zb < 0.05 || zc < 0.05 { continue; }
+            let shade = 0.35 + 0.65 * (dot(nrm, light) / dot(nrm, nrm).sqrt().max(1e-12)).max(0.0);
+            let g = (body_rgb * shade) as u8;
+            tris.push(((za + zb + zc) / 3.0, [pa, pb, pc], egui::Color32::from_rgb(g, g, g)));
+        }
     }
-    for i in 0..4 {
-        segs.extend(seg(fin_root[i], ft[i], fin_s));
-        segs.extend(seg(ft[i], fin_base[i], fin_s));
-        segs.extend(seg(fin_base[i], fin_root[i], fin_s));
-    }
 
-    // body-frame triad: X runs along the rocket (longitudinal/roll axis), Y right, Z down
+    // body-frame triad: X runs along the rocket (longitudinal/roll axis), Y right, Z down.
+    // Drawn over the mesh so attitude stays readable.
+    let mut top = Vec::new();
     for (v, color, name) in [
         ([1.25_f64, 0.0, 0.0], ax_n, "X"),
         ([0.0, 0.55, 0.0], ax_e, "Y"),
         ([0.0, 0.0, 0.55], ax_u, "Z"),
     ] {
         let tip3 = rot(v[0], v[1], v[2]);
-        segs.extend(seg([0.0, 0.0, 0.0], tip3, egui::Stroke::new(2.2, color)));
+        top.extend(seg([0.0, 0.0, 0.0], tip3, egui::Stroke::new(2.2, color)));
         let (tip, z) = project(tip3);
         if z >= 0.05 {
             labels.push((tip, name, color));
         }
     }
 
+    // painter's algorithm: merge depth-sorted segments and triangles, far first
     segs.sort_by(|a, b| b.0.total_cmp(&a.0));
-    for (_, a, b, s) in &segs {
+    tris.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut tri_it = tris.iter().peekable();
+    let mut mesh = egui::Mesh::default();
+    let fill = |mesh: &mut egui::Mesh, (_, p, c): &(f64, [egui::Pos2; 3], egui::Color32)| {
+        let i = mesh.vertices.len() as u32;
+        p.iter().for_each(|q| mesh.colored_vertex(*q, *c));
+        mesh.add_triangle(i, i + 1, i + 2);
+    };
+    for (d, a, b, s) in &segs {
+        while let Some(t) = tri_it.next_if(|t| t.0 >= *d) {
+            fill(&mut mesh, t);
+        }
+        if !mesh.is_empty() {
+            painter.add(std::mem::take(&mut mesh));
+        }
+        painter.line_segment([*a, *b], *s);
+    }
+    tri_it.for_each(|t| fill(&mut mesh, t));
+    painter.add(mesh);
+    for (_, a, b, s) in &top {
         painter.line_segment([*a, *b], *s);
     }
     let lf = egui::FontId::new(10.0, egui::FontFamily::Monospace);
@@ -439,6 +484,38 @@ pub fn quaternion_orientation_viewer(
         vf,
         text_c,
     );
+
+    let btn_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - m - 48.0, rect.top() + m), egui::vec2(48.0, 18.0));
+    if ui.put(btn_rect, egui::Button::new("STL").selected(show_stl)).clicked() {
+        ui.data_mut(|d| d.insert_temp(stl_id, !show_stl));
+    }
+}
+
+/// Rocket triangles in body frame (+X = nose), parsed once from the embedded STL.
+fn rocket_mesh() -> &'static [[[f64; 3]; 3]] {
+    static MESH: std::sync::OnceLock<Vec<[[f64; 3]; 3]>> = std::sync::OnceLock::new();
+    MESH.get_or_init(|| parse_stl(include_bytes!("../../assets/chicken.stl")))
+}
+
+/// Binary STL -> triangles. STL +Z (long axis) maps to body +X spanning -0.6..1.0,
+/// centered on the mean vertex XY so the roll axis runs through the body.
+fn parse_stl(b: &[u8]) -> Vec<[[f64; 3]; 3]> {
+    let tris: Vec<[[f64; 3]; 3]> = b.get(84..).unwrap_or(&[]).chunks_exact(50)
+        .map(|c| {
+            let f = |o: usize| f32::from_le_bytes([c[o], c[o + 1], c[o + 2], c[o + 3]]) as f64;
+            std::array::from_fn(|v| std::array::from_fn(|k| f(12 + v * 12 + k * 4)))
+        })
+        .collect();
+    let n = (tris.len() * 3).max(1) as f64;
+    let (mut cx, mut cy, mut z0, mut z1) = (0.0, 0.0, f64::MAX, f64::MIN);
+    for p in tris.iter().flatten() {
+        cx += p[0] / n;
+        cy += p[1] / n;
+        z0 = z0.min(p[2]);
+        z1 = z1.max(p[2]);
+    }
+    let s = 1.6 / (z1 - z0);
+    tris.iter().map(|t| t.map(|p| [(p[2] - z0) * s - 0.6, (p[0] - cx) * s, (p[1] - cy) * s])).collect()
 }
 
 pub enum TimelineClick {
@@ -693,4 +770,16 @@ pub fn gap_timeline_chart(
             }
         });
     handle_click(&plot_response.response, &plot_response.transform)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rocket_mesh_spans_body_x() {
+        let m = super::rocket_mesh();
+        assert_eq!(m.len(), 4744);
+        let xs = m.iter().flatten().map(|p| p[0]);
+        let (lo, hi) = xs.fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        assert!((lo + 0.6).abs() < 1e-9 && (hi - 1.0).abs() < 1e-9);
+    }
 }
