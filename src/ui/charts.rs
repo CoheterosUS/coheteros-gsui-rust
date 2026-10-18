@@ -114,10 +114,10 @@ pub fn kalman_pz_chart(ui: &mut egui::Ui, state: &AppState, height: f32) {
     let pts: PlotPoints = state.kalman_pz.iter().enumerate().map(|(i, &v)| [i as f64, v]).collect();
     telemetry_plot("kalman_pz_plot", height)
         .label_formatter(multi_series_formatter(vec![
-            ("1\u{03c3}", &state.kalman_pz, "m"),
+            ("1-SIGMA", &state.kalman_pz, "m"),
         ]))
         .show(ui, |plot_ui| {
-            plot_ui.line(Line::new("1\u{03c3}", pts));
+            plot_ui.line(Line::new("1-SIGMA", pts));
         });
 }
 

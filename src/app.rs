@@ -142,7 +142,7 @@ impl GroundStationApp {
                     ui.label("BATTERY");
                     ui.label(egui::RichText::new(format!("{:.2} V", t.battery_voltage)).family(egui::FontFamily::Name("Bold".into())).color(tc.yellow));
                     ui.separator();
-                    ui.label("POS Z \u{03c3}");
+                    ui.label("POS Z 1-SIGMA");
                     ui.label(egui::RichText::new(format!("{:.2} m", t.kalman_pz.max(0.0).sqrt())).family(egui::FontFamily::Name("Bold".into())));
                     ui.separator();
                     ui.label("PRESSURE");
@@ -312,7 +312,7 @@ impl GroundStationApp {
                     ("GYROSCOPE", ui::charts::gyroscope_chart),
                     ("POS Z (KALMAN)", ui::charts::pos_z_chart),
                     ("VEL Z (KALMAN)", ui::charts::vel_z_chart),
-                    ("POS Z UNCERTAINTY (1\u{03c3})", ui::charts::kalman_pz_chart),
+                    ("POS Z UNCERTAINTY (1-SIGMA)", ui::charts::kalman_pz_chart),
                     ("BATTERY", ui::charts::battery_chart),
                     ("PRESSURE", ui::charts::pressure_chart),
                     ("TEMPERATURE", ui::charts::temperature_chart),
@@ -592,8 +592,7 @@ impl GroundStationApp {
             egui::ViewportId::from_hash_of("flight_controls"),
             egui::ViewportBuilder::default()
                 .with_title("Flight Controls - Coheteros GS")
-                .with_inner_size([1600.0, 200.0])
-                .with_always_on_top(),
+                .with_inner_size([1600.0, 200.0]),
             |ctx, _class| {
                 theme::apply_visuals(ctx, dm);
 
@@ -1153,7 +1152,7 @@ impl eframe::App for GroundStationApp {
                     "GYROSCOPE" => ui::charts::gyroscope_chart,
                     "POS Z (KALMAN)" => ui::charts::pos_z_chart,
                     "VEL Z (KALMAN)" => ui::charts::vel_z_chart,
-                    "POS Z UNCERTAINTY (1\u{03c3})" => ui::charts::kalman_pz_chart,
+                    "POS Z UNCERTAINTY (1-SIGMA)" => ui::charts::kalman_pz_chart,
                     "BATTERY" => ui::charts::battery_chart,
                     "PRESSURE" => ui::charts::pressure_chart,
                     "TEMPERATURE" => ui::charts::temperature_chart,
@@ -1572,7 +1571,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                         theme::data_row(ui, "LATITUDE", &format!("{:.6} \u{00b0}", r.latitude), dm);
                         theme::data_row(ui, "LONGITUDE", &format!("{:.6} \u{00b0}", r.longitude), dm);
                         theme::data_row(ui, "SATELLITES", &format!("{}", r.satellites), dm);
-                        theme::data_row(ui, "POS Z \u{03c3}", &format!("{:.2} m", r.kalman_pz.max(0.0).sqrt()), dm);
+                        theme::data_row(ui, "POS Z 1-SIGMA", &format!("{:.2} m", r.kalman_pz.max(0.0).sqrt()), dm);
                     }
                 });
 
@@ -1774,9 +1773,9 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 } else { na_label(ui); }
             });
             ui.add_space(4.0);
-            theme::bordered_section(ui, "POS Z UNCERTAINTY (1\u{03c3})", tc.accent, dm, |ui| {
+            theme::bordered_section(ui, "POS Z UNCERTAINTY (1-SIGMA)", tc.accent, dm, |ui| {
                 if v.has_kalman() {
-                    if let Some(t) = charts::single_series_chart(ui, "sd_kalman_pz", "1\u{03c3}", "m", &v.timestamps, &v.kalman_pz_sigma, v.chart_points, selected_t, zoom_x, link_axes, reset) {
+                    if let Some(t) = charts::single_series_chart(ui, "sd_kalman_pz", "1-SIGMA", "m", &v.timestamps, &v.kalman_pz_sigma, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
