@@ -1,6 +1,6 @@
 [package]
 name = "coheteros-gsui"
-version = "2026.10.12"
+version = "2026.10.13"
 edition = "2024"
 
 [dependencies]
