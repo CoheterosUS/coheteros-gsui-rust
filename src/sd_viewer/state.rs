@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -160,6 +160,16 @@ pub struct SdViewerState {
     pub last_export_dir: Option<String>,
     pub bg_start_time: Option<Instant>,
     pub bg_cancel: Option<Arc<AtomicBool>>,
+    pub detached_charts: HashSet<String>,
+    pub trim_start: usize,
+    pub trim_end: usize,
+    pub trim_active: bool,
+    pub max_baro_altitude: f64,
+    pub max_gps_altitude: f64,
+    pub max_vert_velocity: f64,
+    pub max_accel_magnitude: f64,
+    pub min_battery_voltage: f64,
+    pub max_battery_voltage: f64,
 }
 
 impl SdViewerState {
@@ -221,6 +231,16 @@ impl SdViewerState {
             last_export_dir: None,
             bg_start_time: None,
             bg_cancel: None,
+            detached_charts: HashSet::new(),
+            trim_start: 0,
+            trim_end: 0,
+            trim_active: false,
+            max_baro_altitude: 0.0,
+            max_gps_altitude: 0.0,
+            max_vert_velocity: 0.0,
+            max_accel_magnitude: 0.0,
+            min_battery_voltage: 0.0,
+            max_battery_voltage: 0.0,
         }
     }
 
@@ -299,6 +319,7 @@ impl SdViewerState {
     fn finish_load(&mut self, records: Vec<SdRecord>, flight_starts: Vec<usize>, path: String, source: DataSource) {
         self.data_source = source;
         self.extract_series(&records);
+        self.compute_extremes(&records);
         self.build_state_segments(&records);
         self.detect_gaps(&records);
         for idx in flight_starts {
@@ -317,6 +338,9 @@ impl SdViewerState {
         }
         self.records = records;
         self.selected_index = 0;
+        self.trim_start = 0;
+        self.trim_end = self.records.len().saturating_sub(1);
+        self.trim_active = false;
         self.file_path = Some(path);
         self.status_message = Some(format!("LOADED {} {} RECORDS", self.records.len(), self.source_label()));
     }
@@ -566,6 +590,40 @@ impl SdViewerState {
         }
     }
 
+    fn compute_extremes(&mut self, records: &[SdRecord]) {
+        let mut max_baro = f64::NEG_INFINITY;
+        let mut max_gps = f64::NEG_INFINITY;
+        let mut max_vel = f64::NEG_INFINITY;
+        let mut max_accel = 0.0_f64;
+        let mut min_bat = f64::INFINITY;
+        let mut max_bat = f64::NEG_INFINITY;
+        let mut has_any = false;
+
+        for (i, r) in records.iter().enumerate() {
+            has_any = true;
+            let baro = self.baro_altitude.get(i).copied().unwrap_or(0.0);
+            max_baro = max_baro.max(baro);
+            max_gps = max_gps.max(r.gps_altitude);
+            let bv = self.baro_velocity.get(i).copied().unwrap_or(0.0);
+            max_vel = max_vel.max(-bv);
+            let mag = (r.accel[0] * r.accel[0] + r.accel[1] * r.accel[1] + r.accel[2] * r.accel[2]).sqrt();
+            max_accel = max_accel.max(mag);
+            if r.battery_voltage > 0.0 {
+                min_bat = min_bat.min(r.battery_voltage);
+                max_bat = max_bat.max(r.battery_voltage);
+            }
+        }
+
+        if has_any {
+            self.max_baro_altitude = max_baro;
+            self.max_gps_altitude = max_gps;
+            self.max_vert_velocity = max_vel;
+            self.max_accel_magnitude = max_accel;
+            self.min_battery_voltage = if min_bat.is_finite() { min_bat } else { 0.0 };
+            self.max_battery_voltage = if max_bat.is_finite() { max_bat } else { 0.0 };
+        }
+    }
+
     fn detect_gaps(&mut self, records: &[SdRecord]) {
         if records.len() < 2 {
             return;
@@ -767,16 +825,98 @@ impl SdViewerState {
         self.data_source != DataSource::Csv
     }
 
+    pub fn start_export_trimmed_bin(&mut self, path: &str) {
+        let start = self.trim_start;
+        let end = (self.trim_end + 1).min(self.records.len());
+        if start >= end {
+            self.error = Some("INVALID TRIM RANGE".to_string());
+            return;
+        }
+        self.error = None;
+        self.bg_label = Some("EXPORTING BIN".to_string());
+        self.bg_start_time = Some(Instant::now());
+        let count = end - start;
+        self.bg_total = count;
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.bg_progress = Some(Arc::clone(&progress));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.bg_cancel = Some(Arc::clone(&cancel));
+
+        let (tx, rx) = mpsc::channel();
+        let records: Vec<Vec<u8>> = self.records[start..end].iter().map(|r| r.raw.clone()).collect();
+        let path_owned = path.to_string();
+        std::thread::spawn(move || {
+            let mut file = match std::fs::File::create(&path_owned) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx.send(BgTaskResult::Error(format!("Failed to create file: {}", e)));
+                    return;
+                }
+            };
+            for (i, raw) in records.iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = tx.send(BgTaskResult::Cancelled);
+                    return;
+                }
+                if let Err(e) = file.write_all(raw) {
+                    let _ = tx.send(BgTaskResult::Error(format!("Write error: {}", e)));
+                    return;
+                }
+                progress.store(i + 1, Ordering::Relaxed);
+            }
+            let _ = tx.send(BgTaskResult::Exported(path_owned));
+        });
+        self.bg_receiver = Some(rx);
+    }
+
+    pub fn start_export_trimmed_csv(&mut self, path: &str) {
+        let start = self.trim_start;
+        let end = (self.trim_end + 1).min(self.records.len());
+        if start >= end {
+            self.error = Some("INVALID TRIM RANGE".to_string());
+            return;
+        }
+        self.error = None;
+        self.bg_label = Some("EXPORTING CSV".to_string());
+        self.bg_start_time = Some(Instant::now());
+        let count = end - start;
+        self.bg_total = count;
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.bg_progress = Some(Arc::clone(&progress));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.bg_cancel = Some(Arc::clone(&cancel));
+
+        let (tx, rx) = mpsc::channel();
+        let records: Vec<SdRecord> = self.records[start..end].to_vec();
+        let baro_altitude: Vec<f64> = self.baro_altitude.get(start..end).unwrap_or(&[]).to_vec();
+        let baro_velocity: Vec<f64> = self.baro_velocity.get(start..end).unwrap_or(&[]).to_vec();
+        let source = self.data_source;
+        let path_owned = path.to_string();
+        std::thread::spawn(move || {
+            let result = export_csv_to_file(&path_owned, &records, &baro_altitude, &baro_velocity, source, Some(&progress), Some(&cancel));
+            match result {
+                Ok(true) => { let _ = tx.send(BgTaskResult::Exported(path_owned)); }
+                Ok(false) => { let _ = tx.send(BgTaskResult::Cancelled); }
+                Err(e) => { let _ = tx.send(BgTaskResult::Error(e)); }
+            }
+        });
+        self.bg_receiver = Some(rx);
+    }
+
     pub fn close_file(&mut self) {
         self.records.clear();
         self.file_path = None;
         self.error = None;
         self.replay_playing = false;
         self.replay_last_wall = None;
+        self.trim_active = false;
+        self.trim_start = 0;
+        self.trim_end = 0;
         self.clear_series();
     }
 
     fn clear_series(&mut self) {
+        self.detached_charts.clear();
         self.state_segments.clear();
         self.timeline_markers.clear();
         self.timestamps.clear();

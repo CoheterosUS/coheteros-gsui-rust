@@ -531,6 +531,7 @@ pub fn state_timeline_chart(
     zoom_x: Option<(f64, f64)>,
     link_axes: bool,
     reset: bool,
+    trim_range: Option<(f64, f64)>,
 ) -> Option<TimelineClick> {
     let mut by_state: BTreeMap<u8, (&str, egui::Color32, Vec<Bar>)> = BTreeMap::new();
     for seg in segments {
@@ -622,6 +623,20 @@ pub fn state_timeline_chart(
             }
             if let Some(vline) = cursor_line(plot_ui.ctx(), selected_t) {
                 plot_ui.vline(vline);
+            }
+            if let Some((ts, te)) = trim_range {
+                let trim_start_color = egui::Color32::from_rgb(50, 220, 120);
+                let trim_end_color = egui::Color32::from_rgb(220, 50, 80);
+                plot_ui.vline(
+                    VLine::new("TRIM START", ts)
+                        .color(trim_start_color)
+                        .width(2.5),
+                );
+                plot_ui.vline(
+                    VLine::new("TRIM END", te)
+                        .color(trim_end_color)
+                        .width(2.5),
+                );
             }
         });
 

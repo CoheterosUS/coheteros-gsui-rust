@@ -132,24 +132,31 @@ impl AppState {
         let is_a = t.source == TelemetrySource::A || t.source == TelemetrySource::Full;
         let is_b = t.source == TelemetrySource::B || t.source == TelemetrySource::Full;
 
-        if is_a {
-            push_bounded(&mut self.baro_altitude, t.baro_altitude);
-            push_bounded(&mut self.pos_z, t.pos_z);
-            push_bounded(&mut self.vel_z, t.vel_z);
-            push_bounded(&mut self.kalman_pz, t.kalman_pz.max(0.0).sqrt());
-        }
+        // Push ALL series on every packet so deques stay aligned (same index = same time).
+        // For fields not in this packet, repeat last known value.
+        let baro_val = if is_a { t.baro_altitude } else { self.baro_altitude.back().copied().unwrap_or(0.0) };
+        let pz_val = if is_a { t.pos_z } else { self.pos_z.back().copied().unwrap_or(0.0) };
+        let vz_val = if is_a { t.vel_z } else { self.vel_z.back().copied().unwrap_or(0.0) };
+        let kpz_val = if is_a { t.kalman_pz.max(0.0).sqrt() } else { self.kalman_pz.back().copied().unwrap_or(0.0) };
+        push_bounded(&mut self.baro_altitude, baro_val);
+        push_bounded(&mut self.pos_z, pz_val);
+        push_bounded(&mut self.vel_z, vz_val);
+        push_bounded(&mut self.kalman_pz, kpz_val);
 
-        if is_b {
-            push_bounded(&mut self.gps_altitude, t.gps_altitude);
-            push_bounded(&mut self.battery, t.battery_voltage);
-            push_bounded(&mut self.pressure, t.pressure_pa);
-            push_bounded(&mut self.temperature, t.temperature_c);
-            if t.latitude != 0.0 || t.longitude != 0.0 {
-                if self.gps_trail.len() >= MAX_DATA_POINTS {
-                    self.gps_trail.pop_front();
-                }
-                self.gps_trail.push_back((t.latitude, t.longitude));
+        let gps_val = if is_b { t.gps_altitude } else { self.gps_altitude.back().copied().unwrap_or(0.0) };
+        let bat_val = if is_b { t.battery_voltage } else { self.battery.back().copied().unwrap_or(0.0) };
+        let prs_val = if is_b { t.pressure_pa } else { self.pressure.back().copied().unwrap_or(0.0) };
+        let tmp_val = if is_b { t.temperature_c } else { self.temperature.back().copied().unwrap_or(0.0) };
+        push_bounded(&mut self.gps_altitude, gps_val);
+        push_bounded(&mut self.battery, bat_val);
+        push_bounded(&mut self.pressure, prs_val);
+        push_bounded(&mut self.temperature, tmp_val);
+
+        if is_b && (t.latitude != 0.0 || t.longitude != 0.0) {
+            if self.gps_trail.len() >= MAX_DATA_POINTS {
+                self.gps_trail.pop_front();
             }
+            self.gps_trail.push_back((t.latitude, t.longitude));
         }
 
         self.packet_count += 1;

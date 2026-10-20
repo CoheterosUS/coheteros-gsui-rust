@@ -1183,6 +1183,10 @@ impl eframe::App for GroundStationApp {
             }
         }
 
+        // Detached chart viewports for SD/CSV viewers
+        render_sd_detached_viewports(&mut self.sd_viewer, root_ui, dm, tc, "sd");
+        render_sd_detached_viewports(&mut self.csv_viewer, root_ui, dm, tc, "csv");
+
         match self.active_tab {
             ActiveTab::LiveTelemetry => self.render_live_telemetry(root_ui),
             ActiveTab::SdViewer => render_log_viewer(&mut self.sd_viewer, root_ui, dm, ViewerKind::SdFlash),
@@ -1293,6 +1297,16 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 if ui.button("CLOSE").clicked() {
                     v.close_file();
                 }
+                let trim_label = if v.trim_active { "TRIM ON" } else { "TRIM" };
+                if ui.add_enabled(!v.records.is_empty(), egui::Button::new(trim_label)
+                    .selected(v.trim_active)).clicked() {
+                    v.trim_active = !v.trim_active;
+                    if v.trim_active {
+                        v.trim_start = 0;
+                        v.trim_end = v.records.len().saturating_sub(1);
+                    }
+                }
+
                 if kind == ViewerKind::SdFlash && ui.add_enabled(!v.is_busy(), egui::Button::new(
                     egui::RichText::new("EXPORT CSV").color(egui::Color32::WHITE),
                 ).fill(tc.green)).clicked() {
@@ -1361,6 +1375,70 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             });
         });
         return;
+    }
+
+    // === TRIM BAR (above scrubber when active) ===
+    if v.trim_active && !v.records.is_empty() {
+        egui::Panel::bottom(kind.panel_id("trim_bar"))
+            .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(egui::Margin::symmetric(8, 6)))
+            .show(root_ui, |ui| {
+            ui.horizontal(|ui| {
+                let max = v.records.len().saturating_sub(1);
+                ui.label(egui::RichText::new("TRIM").color(tc.accent).strong());
+                ui.separator();
+                ui.label("START");
+                ui.add(egui::DragValue::new(&mut v.trim_start).range(0..=v.trim_end).speed(1));
+                ui.separator();
+                ui.label("END");
+                ui.add(egui::DragValue::new(&mut v.trim_end).range(v.trim_start..=max).speed(1));
+                ui.separator();
+                let count = v.trim_end.saturating_sub(v.trim_start) + 1;
+                ui.label(format!("{} RECORDS", count));
+                if let (Some(ts), Some(te)) = (v.timestamps.get(v.trim_start), v.timestamps.get(v.trim_end)) {
+                    let dur = te - ts;
+                    let mins = (dur / 60.0) as u32;
+                    let secs = dur % 60.0;
+                    ui.separator();
+                    ui.label(format!("{:02}:{:04.1}", mins, secs));
+                }
+                ui.separator();
+                if ui.button("SET START TO CURSOR").clicked() {
+                    v.trim_start = v.selected_index;
+                }
+                if ui.button("SET END TO CURSOR").clicked() {
+                    v.trim_end = v.selected_index;
+                }
+                ui.separator();
+                if ui.add(egui::Button::new(
+                    egui::RichText::new("SAVE TRIMMED BIN").color(egui::Color32::WHITE),
+                ).fill(tc.green)).clicked() {
+                    let default_name = v.file_path.as_ref()
+                        .and_then(|p| std::path::Path::new(p).file_stem().map(|s| format!("{}_trimmed.bin", s.to_string_lossy())))
+                        .unwrap_or_else(|| "trimmed.bin".to_string());
+                    if let Some(save_path) = rfd::FileDialog::new()
+                        .set_file_name(&default_name)
+                        .add_filter("Binary", &["bin"])
+                        .save_file()
+                    {
+                        v.start_export_trimmed_bin(&save_path.display().to_string());
+                    }
+                }
+                if ui.add(egui::Button::new(
+                    egui::RichText::new("SAVE TRIMMED CSV").color(egui::Color32::WHITE),
+                ).fill(tc.green)).clicked() {
+                    let default_name = v.file_path.as_ref()
+                        .and_then(|p| std::path::Path::new(p).file_stem().map(|s| format!("{}_trimmed.csv", s.to_string_lossy())))
+                        .unwrap_or_else(|| "trimmed.csv".to_string());
+                    if let Some(save_path) = rfd::FileDialog::new()
+                        .set_file_name(&default_name)
+                        .add_filter("CSV", &["csv"])
+                        .save_file()
+                    {
+                        v.start_export_trimmed_csv(&save_path.display().to_string());
+                    }
+                }
+            });
+        });
     }
 
     // === SD BOTTOM: Timeline scrubber + Replay controls ===
@@ -1597,25 +1675,78 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
 
             ui.add_space(4.0);
 
-            ui.columns(4, |cols| {
-                theme::bordered_section(&mut cols[0], "FLAGS", tc.red_accent, dm, |ui| {
-                    if let Some(ref r) = r {
-                        theme::data_row(ui, "RAW", &format!("0x{:08X}", r.flags), dm);
-                        for &(bit, name) in packet::FAULT_NAMES {
-                            let set = r.flags & bit != 0;
-                            let display_name = name.trim_end_matches(" Failed");
-                            let (status, color) = if set { ("FAIL", tc.red_accent) } else { ("OK", tc.green) };
-                            theme::data_row_colored(ui, display_name, status, color, dm);
-                        }
-                        ui.add_space(4.0);
+            theme::bordered_section(ui, "FLAGS", tc.red_accent, dm, |ui| {
+                if let Some(ref r) = r {
+                    let bold = egui::FontFamily::Name("Bold".into());
+                    let flag_chip = |ui: &mut egui::Ui, bit: u32, label: &str| {
+                        let set = r.flags & bit != 0;
+                        let (status, color) = if set { ("FAIL", tc.red_accent) } else { ("OK", tc.green) };
+                        ui.label(egui::RichText::new(label).color(tc.label_color));
+                        ui.label(egui::RichText::new(status).family(bold.clone()).color(color));
+                    };
+                    let group_label = |ui: &mut egui::Ui, text: &str| {
+                        ui.label(egui::RichText::new(text).family(bold.clone()).color(tc.accent));
+                    };
+
+                    // Row 1: raw value + sensor faults
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        ui.label(egui::RichText::new(format!("0x{:08X}", r.flags)).family(bold.clone()).color(tc.value_color));
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        group_label(ui, "BARO");
+                        flag_chip(ui, 1 << 0, "BMP280 Idle");
+                        flag_chip(ui, 1 << 1, "Perf");
+                        flag_chip(ui, 1 << 2, "BMP581 Idle");
+                        flag_chip(ui, 1 << 3, "Perf");
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        group_label(ui, "IMU");
+                        flag_chip(ui, 1 << 4, "Idle");
+                        flag_chip(ui, 1 << 5, "Perf");
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        group_label(ui, "MAG");
+                        flag_chip(ui, 1 << 6, "Idle");
+                        flag_chip(ui, 1 << 7, "Perf");
+                    });
+
+                    ui.add_space(2.0);
+
+                    // Row 2: storage + calibration + deep cal
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        // Spacer to align with hex value in row 1
+                        let hex_galley = ui.painter().layout_no_wrap(
+                            format!("0x{:08X}", r.flags),
+                            egui::FontId::new(ui.text_style_height(&egui::TextStyle::Body), bold.clone()),
+                            egui::Color32::TRANSPARENT,
+                        );
+                        ui.add_space(hex_galley.size().x);
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        group_label(ui, "SD");
+                        flag_chip(ui, 1 << 8, "Mount");
+                        flag_chip(ui, 1 << 9, "Open");
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        group_label(ui, "FLASH");
+                        flag_chip(ui, 1 << 10, "JEDEC ID");
+                        flag_chip(ui, 1 << 11, "Init");
+                        flag_chip(ui, 1 << 12, "Cal Write");
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        group_label(ui, "CAL");
+                        flag_chip(ui, 1 << 13, "6-Point");
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
                         let faces = packet::deep_cal_faces_captured(r.flags);
                         let current = packet::deep_cal_current_face(r.flags);
-                        theme::data_row(ui, "DEEP CAL FACES", &format!("{}/6", faces), dm);
-                        theme::data_row(ui, "DEEP CAL CURRENT", &format!("{}", current), dm);
-                    }
-                });
+                        group_label(ui, "DEEP CAL");
+                        ui.label(egui::RichText::new(format!("{}/6", faces)).family(bold.clone()).color(tc.value_color));
+                        ui.label(egui::RichText::new("FACE").color(tc.label_color));
+                        ui.label(egui::RichText::new(format!("{}", current)).family(bold.clone()).color(tc.value_color));
+                    });
+                }
+            });
 
-                theme::bordered_section(&mut cols[1], "ACCELERATION", tc.accent, dm, |ui| {
+            ui.add_space(4.0);
+
+            ui.columns(3, |cols| {
+                theme::bordered_section(&mut cols[0], "ACCELERATION", tc.accent, dm, |ui| {
                     if let Some(ref r) = r {
                         theme::data_row(ui, "ACCEL X", &format!("{:.2} m/s\u{00b2}", r.accel[0]), dm);
                         theme::data_row(ui, "ACCEL Y", &format!("{:.2} m/s\u{00b2}", r.accel[1]), dm);
@@ -1623,7 +1754,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                     }
                 });
 
-                theme::bordered_section(&mut cols[2], "GYROSCOPE", tc.accent, dm, |ui| {
+                theme::bordered_section(&mut cols[1], "GYROSCOPE", tc.accent, dm, |ui| {
                     if let Some(ref r) = r {
                         theme::data_row(ui, "GYRO X", &format!("{:.2} \u{00b0}/s", r.gyro[0]), dm);
                         theme::data_row(ui, "GYRO Y", &format!("{:.2} \u{00b0}/s", r.gyro[1]), dm);
@@ -1632,7 +1763,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 });
 
                 let has_utc = v.has_utc();
-                theme::bordered_section(&mut cols[3], "TIMESTAMP", tc.accent, dm, |ui| {
+                theme::bordered_section(&mut cols[2], "TIMESTAMP", tc.accent, dm, |ui| {
                     if !has_utc {
                         ui.label(egui::RichText::new("NOT AVAILABLE").color(tc.label_color.gamma_multiply(0.5)));
                     } else if let Some(ref r) = r {
@@ -1671,6 +1802,20 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             });
         }
 
+        if has_full && !v.records.is_empty() {
+            ui.add_space(4.0);
+            theme::bordered_section(ui, "MAX / MIN", egui::Color32::from_rgb(255, 180, 50), dm, |ui| {
+                ui.columns(4, |cols| {
+                    theme::data_row(&mut cols[0], "PEAK BARO ALT", &format!("{:.1} m", v.max_baro_altitude), dm);
+                    theme::data_row(&mut cols[0], "PEAK GPS ALT", &format!("{:.1} m", v.max_gps_altitude), dm);
+                    theme::data_row(&mut cols[1], "MAX VERT VEL", &format!("{:.1} m/s", v.max_vert_velocity), dm);
+                    theme::data_row(&mut cols[1], "MAX ACCEL", &format!("{:.1} m/s\u{00b2}", v.max_accel_magnitude), dm);
+                    theme::data_row(&mut cols[2], "MAX G-FORCE", &format!("{:.1} G", v.max_accel_magnitude / 9.81), dm);
+                    theme::data_row(&mut cols[3], "BATTERY", &format!("{:.2} - {:.2} V", v.min_battery_voltage, v.max_battery_voltage), dm);
+                });
+            });
+        }
+
             ui.add_space(4.0);
 
         egui::ScrollArea::vertical().id_salt("sd_scroll").show(ui, |ui| {
@@ -1693,8 +1838,16 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 });
             };
 
+            let trim_range = if v.trim_active {
+                let ts = v.timestamps.get(v.trim_start).copied();
+                let te = v.timestamps.get(v.trim_end).copied();
+                ts.zip(te)
+            } else {
+                None
+            };
+
             theme::bordered_section(ui, "FLIGHT STATE", tc.accent, dm, |ui| {
-                if let Some(click) = charts::state_timeline_chart(ui, &v.state_segments, &v.timeline_markers, selected_t, zoom_x, link_axes, reset) {
+                if let Some(click) = charts::state_timeline_chart(ui, &v.state_segments, &v.timeline_markers, selected_t, zoom_x, link_axes, reset, trim_range) {
                     match click {
                         charts::TimelineClick::Segment { start, end } => {
                             if v.zoomed_segment == Some((start, end)) {
@@ -1729,59 +1882,73 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                 });
             }
             ui.add_space(4.0);
-            theme::bordered_section(ui, "ALTITUDE", tc.accent, dm, |ui| {
+            let detached = &v.detached_charts;
+            let mut to_detach: Option<String> = None;
+
+            macro_rules! detachable_section {
+                ($name:expr, $body:expr) => {
+                    if !detached.contains($name) {
+                        theme::bordered_section(ui, $name, tc.accent, dm, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button("DETACH").clicked() {
+                                        to_detach = Some($name.to_string());
+                                    }
+                                });
+                            });
+                            $body(ui);
+                        });
+                        ui.add_space(4.0);
+                    }
+                };
+            }
+
+            detachable_section!("ALTITUDE", |ui: &mut egui::Ui| {
                 if has_full {
                     if let Some(t) = charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, &v.baro_altitude_raw, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "BARO VELOCITY", tc.accent, dm, |ui| {
+            detachable_section!("BARO VELOCITY", |ui: &mut egui::Ui| {
                 if has_full {
                     if let Some(t) = charts::single_series_chart(ui, "sd_baro_vel", "BARO VEL", "m/s", &v.timestamps, &v.baro_velocity, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "ACCELERATION", tc.accent, dm, |ui| {
+            detachable_section!("ACCELERATION", |ui: &mut egui::Ui| {
                 if let Some(t) = charts::triple_series_chart(ui, "sd_accel", "m/s\u{00b2}", &v.timestamps, &v.accel_x, &v.accel_y, &v.accel_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                     clicked_ts = Some(t);
                 }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "GYROSCOPE", tc.accent, dm, |ui| {
+            detachable_section!("GYROSCOPE", |ui: &mut egui::Ui| {
                 if let Some(t) = charts::triple_series_chart(ui, "sd_gyro", "\u{00b0}/s", &v.timestamps, &v.gyro_x, &v.gyro_y, &v.gyro_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                     clicked_ts = Some(t);
                 }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "VELOCITY (NED)", tc.accent, dm, |ui| {
+            detachable_section!("VELOCITY (NED)", |ui: &mut egui::Ui| {
                 if v.has_kalman() {
                     if let Some(t) = charts::triple_series_chart(ui, "sd_vel", "m/s", &v.timestamps, &v.vel_x, &v.vel_y, &v.vel_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "POSITION (NED)", tc.accent, dm, |ui| {
+            detachable_section!("POSITION (NED)", |ui: &mut egui::Ui| {
                 if v.has_kalman() {
                     if let Some(t) = charts::triple_series_chart(ui, "sd_pos", "m", &v.timestamps, &v.pos_x, &v.pos_y, &v.pos_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "POS Z UNCERTAINTY (1-SIGMA)", tc.accent, dm, |ui| {
+            detachable_section!("POS Z UNCERTAINTY (1-SIGMA)", |ui: &mut egui::Ui| {
                 if v.has_kalman() {
                     if let Some(t) = charts::single_series_chart(ui, "sd_kalman_pz", "1-SIGMA", "m", &v.timestamps, &v.kalman_pz_sigma, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "ORIENTATION", tc.accent, dm, |ui| {
+            detachable_section!("ORIENTATION", |ui: &mut egui::Ui| {
                 if v.has_kalman() {
                     let idx = v.selected_index;
                     let qw = v.quat_w.get(idx).copied().unwrap_or(1.0);
@@ -1791,46 +1958,50 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                     charts::quaternion_orientation_viewer(ui, qw, qx, qy, qz, dm);
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "QUATERNION", tc.accent, dm, |ui| {
+            detachable_section!("3D TRAJECTORY", |ui: &mut egui::Ui| {
+                if has_full {
+                    ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm);
+                } else { na_label(ui); }
+            });
+            detachable_section!("QUATERNION", |ui: &mut egui::Ui| {
                 if v.has_kalman() {
                     if let Some(t) = charts::quad_series_chart(ui, "sd_quat", &v.timestamps, &v.quat_w, &v.quat_x, &v.quat_y, &v.quat_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "MAGNETOMETER", tc.accent, dm, |ui| {
+            detachable_section!("MAGNETOMETER", |ui: &mut egui::Ui| {
                 if v.has_mag() {
                     if let Some(t) = charts::triple_series_chart(ui, "sd_mag", "mG", &v.timestamps, &v.mag_x, &v.mag_y, &v.mag_z, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "PRESSURE", tc.accent, dm, |ui| {
+            detachable_section!("PRESSURE", |ui: &mut egui::Ui| {
                 if v.has_pressure() {
                     if let Some(t) = charts::single_series_chart(ui, "sd_pressure", "PRESSURE", "Pa", &v.timestamps, &v.pressure, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "TEMPERATURE", tc.accent, dm, |ui| {
+            detachable_section!("TEMPERATURE", |ui: &mut egui::Ui| {
                 if v.has_pressure() {
                     if let Some(t) = charts::single_series_chart(ui, "sd_temp", "TEMP", "\u{00b0}C", &v.timestamps, &v.temperature, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
-            ui.add_space(4.0);
-            theme::bordered_section(ui, "BATTERY", tc.accent, dm, |ui| {
+            detachable_section!("BATTERY", |ui: &mut egui::Ui| {
                 if has_full {
                     if let Some(t) = charts::single_series_chart(ui, "sd_battery", "BATTERY", "V", &v.timestamps, &v.battery, v.chart_points, selected_t, zoom_x, link_axes, reset) {
                         clicked_ts = Some(t);
                     }
                 } else { na_label(ui); }
             });
+
+            if let Some(name) = to_detach {
+                v.detached_charts.insert(name);
+            }
 
             if let Some(z) = new_zoom {
                 v.zoom_x = Some(z);
@@ -1906,6 +2077,111 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
         if !open {
             v.status_message = None;
             v.last_export_dir = None;
+        }
+    }
+}
+
+fn render_sd_detached_viewports(
+    viewer: &mut SdViewerState,
+    root_ui: &mut egui::Ui,
+    dm: bool,
+    tc: &theme::ThemeColors,
+    prefix: &str,
+) {
+    if viewer.records.is_empty() { return; }
+    let names: Vec<String> = viewer.detached_charts.iter().cloned().collect();
+    let mut to_remove: Vec<String> = Vec::new();
+    for name in &names {
+        let selected_t = viewer.timestamps.get(viewer.selected_index).copied();
+        let chart_points = viewer.chart_points;
+        let mut close_requested = false;
+
+        root_ui.ctx().show_viewport_immediate(
+            egui::ViewportId::from_hash_of(format!("{}_{}", prefix, name)),
+            egui::ViewportBuilder::default()
+                .with_title(format!("{} \u{2014} Coheteros GS", name))
+                .with_inner_size([600.0, 300.0]),
+            |ctx, _class| {
+                theme::apply_visuals(ctx, dm);
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    close_requested = true;
+                }
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(tc.panel_bg).inner_margin(8.0))
+                    .show(ctx, |ui| {
+                        render_sd_detached_chart(ui, name, viewer, chart_points, selected_t, dm);
+                    });
+            },
+        );
+        if close_requested {
+            to_remove.push(name.clone());
+        }
+    }
+    for name in to_remove {
+        viewer.detached_charts.remove(&name);
+    }
+}
+
+fn render_sd_detached_chart(
+    ui: &mut egui::Ui,
+    name: &str,
+    v: &SdViewerState,
+    chart_points: usize,
+    selected_t: Option<f64>,
+    dm: bool,
+) {
+    use crate::sd_viewer::charts;
+    match name {
+        "ALTITUDE" => {
+            charts::altitude_chart(ui, &v.timestamps, &v.gps_altitude, &v.baro_altitude, &v.baro_altitude_raw, chart_points, selected_t, None, false, false);
+        }
+        "BARO VELOCITY" => {
+            charts::single_series_chart(ui, "sd_baro_vel_d", "BARO VEL", "m/s", &v.timestamps, &v.baro_velocity, chart_points, selected_t, None, false, false);
+        }
+        "ACCELERATION" => {
+            charts::triple_series_chart(ui, "sd_accel_d", "m/s\u{00b2}", &v.timestamps, &v.accel_x, &v.accel_y, &v.accel_z, chart_points, selected_t, None, false, false);
+        }
+        "GYROSCOPE" => {
+            charts::triple_series_chart(ui, "sd_gyro_d", "\u{00b0}/s", &v.timestamps, &v.gyro_x, &v.gyro_y, &v.gyro_z, chart_points, selected_t, None, false, false);
+        }
+        "VELOCITY (NED)" => {
+            charts::triple_series_chart(ui, "sd_vel_d", "m/s", &v.timestamps, &v.vel_x, &v.vel_y, &v.vel_z, chart_points, selected_t, None, false, false);
+        }
+        "POSITION (NED)" => {
+            charts::triple_series_chart(ui, "sd_pos_d", "m", &v.timestamps, &v.pos_x, &v.pos_y, &v.pos_z, chart_points, selected_t, None, false, false);
+        }
+        "POS Z UNCERTAINTY (1-SIGMA)" => {
+            charts::single_series_chart(ui, "sd_kalman_pz_d", "1-SIGMA", "m", &v.timestamps, &v.kalman_pz_sigma, chart_points, selected_t, None, false, false);
+        }
+        "ORIENTATION" => {
+            let idx = v.selected_index;
+            let qw = v.quat_w.get(idx).copied().unwrap_or(1.0);
+            let qx = v.quat_x.get(idx).copied().unwrap_or(0.0);
+            let qy = v.quat_y.get(idx).copied().unwrap_or(0.0);
+            let qz = v.quat_z.get(idx).copied().unwrap_or(0.0);
+            charts::quaternion_orientation_viewer(ui, qw, qx, qy, qz, dm);
+        }
+        "3D TRAJECTORY" => {
+            ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm);
+        }
+        "QUATERNION" => {
+            charts::quad_series_chart(ui, "sd_quat_d", &v.timestamps, &v.quat_w, &v.quat_x, &v.quat_y, &v.quat_z, chart_points, selected_t, None, false, false);
+        }
+        "MAGNETOMETER" => {
+            charts::triple_series_chart(ui, "sd_mag_d", "mG", &v.timestamps, &v.mag_x, &v.mag_y, &v.mag_z, chart_points, selected_t, None, false, false);
+        }
+        "PRESSURE" => {
+            charts::single_series_chart(ui, "sd_pressure_d", "PRESSURE", "Pa", &v.timestamps, &v.pressure, chart_points, selected_t, None, false, false);
+        }
+        "TEMPERATURE" => {
+            charts::single_series_chart(ui, "sd_temp_d", "TEMP", "\u{00b0}C", &v.timestamps, &v.temperature, chart_points, selected_t, None, false, false);
+        }
+        "BATTERY" => {
+            charts::single_series_chart(ui, "sd_battery_d", "BATTERY", "V", &v.timestamps, &v.battery, chart_points, selected_t, None, false, false);
+        }
+        _ => {
+            let tc = theme::current_theme(dm);
+            ui.label(egui::RichText::new("UNKNOWN CHART").color(tc.label_color));
         }
     }
 }
