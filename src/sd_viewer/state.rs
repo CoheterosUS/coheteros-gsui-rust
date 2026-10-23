@@ -114,6 +114,7 @@ pub struct SdViewerState {
     pub zoomed_segment: Option<(f64, f64)>,
     pub link_axes: bool,
     pub lock_gps: bool,
+    pub map_3d_mode: bool,
     pub timestamps: Vec<f64>,
     pub accel_x: Vec<f64>,
     pub accel_y: Vec<f64>,
@@ -186,6 +187,7 @@ impl SdViewerState {
             zoomed_segment: None,
             link_axes: true,
             lock_gps: true,
+            map_3d_mode: false,
             timestamps: Vec::new(),
             accel_x: Vec::new(),
             accel_y: Vec::new(),
@@ -507,7 +509,9 @@ impl SdViewerState {
         const R: f64 = 287.0;
         const G: f64 = 9.80665;
         const ALPHA: f64 = 0.1;
+        const ALPHA_VEL: f64 = 0.05;
         let mut filtered_alt: Option<f64> = None;
+        let mut filtered_vel: Option<f64> = None;
         let mut prev_alt: Option<f64> = None;
         let mut prev_tick: Option<u32> = None;
 
@@ -551,13 +555,18 @@ impl SdViewerState {
                 };
                 filtered_alt = Some(filt);
 
-                let vel = match (prev_alt, prev_tick) {
+                let raw_vel = match (prev_alt, prev_tick) {
                     (Some(pa), Some(pt)) => {
                         let dt = (r.tick.wrapping_sub(pt)) as f64 / TICK_RATE_HZ;
                         if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
                     }
                     _ => 0.0,
                 };
+                let vel = match filtered_vel {
+                    Some(fv) => fv + ALPHA_VEL * (raw_vel - fv),
+                    None => raw_vel,
+                };
+                filtered_vel = Some(vel);
                 prev_alt = Some(filt);
                 prev_tick = Some(r.tick);
 

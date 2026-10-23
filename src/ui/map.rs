@@ -2,6 +2,13 @@ use walkers::{Map, MapMemory, lat_lon};
 use walkers::sources::{Attribution, TileSource};
 use walkers::TileId;
 
+/// A GPS trajectory point for drawing on the map.
+pub struct TrajectoryPoint {
+    pub lat: f64,
+    pub lon: f64,
+    pub color: egui::Color32,
+}
+
 pub struct EsriSatellite;
 
 impl TileSource for EsriSatellite {
@@ -46,6 +53,7 @@ pub fn gps_map(
     ground_pos: Option<(f64, f64)>,
     launch_site: &mut Option<(f64, f64)>,
     map_state: &mut MapState,
+    trajectory: &[TrajectoryPoint],
 ) -> egui::Rect {
     let my_pos = current_pos
         .map(|(lat, lon)| lat_lon(lat, lon))
@@ -83,6 +91,14 @@ pub fn gps_map(
 
         let painter = ui.painter_at(rect);
         let to_pos = |v: egui::Vec2| egui::pos2(v.x, v.y);
+
+        // Draw trajectory polyline
+        for w in trajectory.windows(2) {
+            let a = to_pos(projector.project(lat_lon(w[0].lat, w[0].lon)));
+            let b = to_pos(projector.project(lat_lon(w[1].lat, w[1].lon)));
+            painter.line_segment([a, b], egui::Stroke::new(3.0, egui::Color32::BLACK));
+            painter.line_segment([a, b], egui::Stroke::new(2.0, w[1].color));
+        }
 
         if let Some((lat, lon)) = ground_pos {
             let pos = to_pos(projector.project(lat_lon(lat, lon)));

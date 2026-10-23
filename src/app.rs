@@ -446,6 +446,7 @@ impl GroundStationApp {
                 ground_pos,
                 launch_site,
                 map_state,
+                &[],
             );
 
             if let Some(t) = t.as_ref() {
@@ -1534,14 +1535,16 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
         .resizable(true)
         .show(root_ui, |ui| {
             theme::bordered_section(ui, "MAP", tc.accent, dm, |ui| {
-                let current_gps = v.selected_record()
-                    .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
-                    .map(|r| (r.latitude, r.longitude));
-                if let Some(ref mut map_state) = v.map_state {
-                    if v.lock_gps {
-                        map_state.memory.follow_my_position();
+                ui.horizontal(|ui| {
+                    let label_2d = if v.map_3d_mode { "2D" } else { "\u{25b6} 2D" };
+                    let label_3d = if v.map_3d_mode { "\u{25b6} 3D" } else { "3D" };
+                    if ui.selectable_label(!v.map_3d_mode, label_2d).clicked() {
+                        v.map_3d_mode = false;
                     }
-                    ui.horizontal(|ui| {
+                    if ui.selectable_label(v.map_3d_mode, label_3d).clicked() {
+                        v.map_3d_mode = true;
+                    }
+                    if !v.map_3d_mode {
                         let border_color = if v.lock_gps { tc.accent } else { tc.label_color };
                         let checkbox_stroke = egui::Stroke::new(1.5, border_color);
                         ui.scope(|ui| {
@@ -1551,67 +1554,85 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
                             visuals.widgets.active.bg_stroke = checkbox_stroke;
                             ui.checkbox(&mut v.lock_gps, "LOCK ON GPS");
                         });
-                    });
-                    ui.add_space(4.0);
-                    let map_rect = ui::map::gps_map(
-                        ui,
-                        current_gps,
-                        None,
-                        &mut None,
-                        map_state,
-                    );
+                    }
+                });
+                ui.add_space(4.0);
 
-                    if let Some(r) = v.selected_record() {
-                        let overlay_width = 195.0;
-                        let overlay_height = 100.0;
-                        let overlay_pos = egui::pos2(
-                            map_rect.right() - overlay_width - 4.0,
-                            map_rect.bottom() - overlay_height - 4.0,
-                        );
-                        let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
-
-                        let painter = ui.painter();
-                        let overlay_bg = if dm {
-                            egui::Color32::from_black_alpha(220)
-                        } else {
-                            egui::Color32::from_white_alpha(220)
-                        };
-                        painter.rect_filled(overlay_rect, 2.0, overlay_bg);
-
-                        let s = 14.0;
-                        let mut y = overlay_rect.top() + 5.0;
-                        let x_label = overlay_rect.left() + 8.0;
-                        let x_value = overlay_rect.left() + 44.0;
-                        let line_h = 18.0;
-
-                        let font = egui::FontId::monospace(s);
-                        let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
-
-                        let rows: &[(&str, String, egui::Color32)] = &[
-                            ("LAT", format!("{:.6}\u{00b0}", r.latitude), tc.value_color),
-                            ("LON", format!("{:.6}\u{00b0}", r.longitude), tc.value_color),
-                            ("ALT", format!("{:.1} m", r.gps_altitude), tc.value_color),
-                            ("SAT", format!("{}", r.satellites), if r.satellites >= 4 { tc.green } else { tc.red_accent }),
-                        ];
-                        for (label, value, color) in rows {
-                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
-                            painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
-                            y += line_h;
+                if v.map_3d_mode {
+                    let mut map_state = v.map_state.take();
+                    let tiles_opt = map_state.as_mut().map(|ms| &mut ms.tiles as &mut dyn walkers::Tiles);
+                    ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm, tiles_opt);
+                    v.map_state = map_state;
+                } else {
+                    let current_gps = v.selected_record()
+                        .filter(|r| r.latitude != 0.0 || r.longitude != 0.0)
+                        .map(|r| (r.latitude, r.longitude));
+                    let traj = ui::trajectory_3d::build_map_trajectory(v);
+                    if let Some(ref mut map_state) = v.map_state {
+                        if v.lock_gps {
+                            map_state.memory.follow_my_position();
                         }
-
-                        let link_rect = egui::Rect::from_min_size(
-                            egui::pos2(x_label, y),
-                            egui::vec2(overlay_width - 16.0, line_h),
+                        let map_rect = ui::map::gps_map(
+                            ui,
+                            current_gps,
+                            None,
+                            &mut None,
+                            map_state,
+                            &traj,
                         );
-                        let link_resp = ui.interact(link_rect, ui.id().with("sd_gmaps_link"), egui::Sense::click());
-                        let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
-                        painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
-                        if link_resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if link_resp.clicked() {
-                            let url = format!("https://www.google.com/maps?q={},{}", r.latitude, r.longitude);
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+
+                        if let Some(r) = v.selected_record() {
+                            let overlay_width = 195.0;
+                            let overlay_height = 100.0;
+                            let overlay_pos = egui::pos2(
+                                map_rect.right() - overlay_width - 4.0,
+                                map_rect.bottom() - overlay_height - 4.0,
+                            );
+                            let overlay_rect = egui::Rect::from_min_size(overlay_pos, egui::vec2(overlay_width, overlay_height));
+
+                            let painter = ui.painter();
+                            let overlay_bg = if dm {
+                                egui::Color32::from_black_alpha(220)
+                            } else {
+                                egui::Color32::from_white_alpha(220)
+                            };
+                            painter.rect_filled(overlay_rect, 2.0, overlay_bg);
+
+                            let s = 14.0;
+                            let mut y = overlay_rect.top() + 5.0;
+                            let x_label = overlay_rect.left() + 8.0;
+                            let x_value = overlay_rect.left() + 44.0;
+                            let line_h = 18.0;
+
+                            let font = egui::FontId::monospace(s);
+                            let bold = egui::FontId::new(s, egui::FontFamily::Name("Bold".into()));
+
+                            let rows: &[(&str, String, egui::Color32)] = &[
+                                ("LAT", format!("{:.6}\u{00b0}", r.latitude), tc.value_color),
+                                ("LON", format!("{:.6}\u{00b0}", r.longitude), tc.value_color),
+                                ("ALT", format!("{:.1} m", r.gps_altitude), tc.value_color),
+                                ("SAT", format!("{}", r.satellites), if r.satellites >= 4 { tc.green } else { tc.red_accent }),
+                            ];
+                            for (label, value, color) in rows {
+                                painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, label, font.clone(), tc.label_color);
+                                painter.text(egui::pos2(x_value, y), egui::Align2::LEFT_TOP, value, bold.clone(), *color);
+                                y += line_h;
+                            }
+
+                            let link_rect = egui::Rect::from_min_size(
+                                egui::pos2(x_label, y),
+                                egui::vec2(overlay_width - 16.0, line_h),
+                            );
+                            let link_resp = ui.interact(link_rect, ui.id().with("sd_gmaps_link"), egui::Sense::click());
+                            let link_color = if link_resp.hovered() { tc.accent } else { tc.label_color };
+                            painter.text(egui::pos2(x_label, y), egui::Align2::LEFT_TOP, "OPEN IN MAPS", font.clone(), link_color);
+                            if link_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if link_resp.clicked() {
+                                let url = format!("https://www.google.com/maps?q={},{}", r.latitude, r.longitude);
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                            }
                         }
                     }
                 }
@@ -1960,7 +1981,7 @@ fn render_log_viewer_inner(v: &mut SdViewerState, root_ui: &mut egui::Ui, dm: bo
             });
             detachable_section!("3D TRAJECTORY", |ui: &mut egui::Ui| {
                 if has_full {
-                    ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm);
+                    ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm, None);
                 } else { na_label(ui); }
             });
             detachable_section!("QUATERNION", |ui: &mut egui::Ui| {
@@ -2162,7 +2183,7 @@ fn render_sd_detached_chart(
             charts::quaternion_orientation_viewer(ui, qw, qx, qy, qz, dm);
         }
         "3D TRAJECTORY" => {
-            ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm);
+            ui::trajectory_3d::trajectory_3d_viewer(ui, v, v.selected_index, dm, None);
         }
         "QUATERNION" => {
             charts::quad_series_chart(ui, "sd_quat_d", &v.timestamps, &v.quat_w, &v.quat_x, &v.quat_y, &v.quat_z, chart_points, selected_t, None, false, false);

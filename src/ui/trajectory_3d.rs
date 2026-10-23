@@ -1,4 +1,7 @@
+use std::f64::consts::PI;
 use crate::sd_viewer::state::{FlightStateExt, SdViewerState};
+use crate::ui::map::TrajectoryPoint;
+use walkers::{Tiles, TileId};
 
 /// A 3D point in local ENU (East, North, Up) meters relative to the first valid GPS fix.
 struct EnuPoint {
@@ -30,16 +33,17 @@ fn build_trajectory(v: &SdViewerState) -> (Vec<EnuPoint>, Option<(f64, f64, f64)
         return (Vec::new(), None);
     }
 
-    // Find first valid GPS fix as reference origin
-    let ref_fix = v.records.iter().find(|r| r.latitude != 0.0 || r.longitude != 0.0);
+    // Find first valid GPS fix as reference origin (need >= 4 satellites for valid fix)
+    let ref_fix = v.records.iter().find(|r| r.satellites >= 4 && (r.latitude != 0.0 || r.longitude != 0.0));
     let (ref_lat, ref_lon, ref_alt) = match ref_fix {
         Some(r) => (r.latitude, r.longitude, r.gps_altitude),
         None => return (Vec::new(), None),
     };
 
     // Collect GPS fixes with their indices for interpolation
+    // Only trust fixes with >= 4 satellites; gaps (e.g. ascent) get linearly interpolated
     let gps_fixes: Vec<(usize, f64, f64)> = v.records.iter().enumerate()
-        .filter(|(_, r)| r.latitude != 0.0 || r.longitude != 0.0)
+        .filter(|(_, r)| r.satellites >= 4 && (r.latitude != 0.0 || r.longitude != 0.0))
         .map(|(i, r)| {
             let (e, n, _) = geodetic_to_enu(r.latitude, r.longitude, r.gps_altitude, ref_lat, ref_lon, ref_alt);
             (i, e, n)
@@ -97,17 +101,87 @@ fn build_trajectory(v: &SdViewerState) -> (Vec<EnuPoint>, Option<(f64, f64, f64)
     (points, Some((ref_lat, ref_lon, ref_alt)))
 }
 
+/// Build interpolated lat/lon trajectory for drawing on the satellite map.
+/// Uses same sat >= 4 validity filter; gaps get linearly interpolated in geodetic space.
+pub fn build_map_trajectory(v: &SdViewerState) -> Vec<TrajectoryPoint> {
+    if v.records.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect valid GPS fixes (sat >= 4) with their record indices
+    let fixes: Vec<(usize, f64, f64)> = v.records.iter().enumerate()
+        .filter(|(_, r)| r.satellites >= 4 && (r.latitude != 0.0 || r.longitude != 0.0))
+        .map(|(i, r)| (i, r.latitude, r.longitude))
+        .collect();
+
+    if fixes.is_empty() {
+        return Vec::new();
+    }
+
+    let total = v.records.len();
+    let max_points = 2000;
+    let step = (total / max_points).max(1);
+    let mut points = Vec::with_capacity(total / step + 1);
+    let mut fix_cursor = 0;
+
+    for i in (0..total).step_by(step) {
+        while fix_cursor + 1 < fixes.len() && fixes[fix_cursor + 1].0 <= i {
+            fix_cursor += 1;
+        }
+
+        let (lat, lon) = if fix_cursor + 1 < fixes.len() {
+            let (i0, lat0, lon0) = fixes[fix_cursor];
+            let (i1, lat1, lon1) = fixes[fix_cursor + 1];
+            let span = (i1 - i0) as f64;
+            if span > 0.0 {
+                let t = ((i - i0) as f64 / span).clamp(0.0, 1.0);
+                (lat0 + t * (lat1 - lat0), lon0 + t * (lon1 - lon0))
+            } else {
+                (lat0, lon0)
+            }
+        } else {
+            (fixes[fix_cursor].1, fixes[fix_cursor].2)
+        };
+
+        points.push(TrajectoryPoint {
+            lat,
+            lon,
+            color: v.records[i].state.timeline_color(),
+        });
+    }
+
+    points
+}
+
+/// Convert tile x/y/zoom to the lat/lon of its NW corner.
+fn tile_to_lat_lon(x: u32, y: u32, zoom: u8) -> (f64, f64) {
+    let n = (1u32 << zoom) as f64;
+    let lon = x as f64 / n * 360.0 - 180.0;
+    let lat = (PI * (1.0 - 2.0 * y as f64 / n)).sinh().atan().to_degrees();
+    (lat, lon)
+}
+
+/// Convert lat/lon to fractional tile coordinates at given zoom.
+fn lat_lon_to_tile_frac(lat: f64, lon: f64, zoom: u8) -> (f64, f64) {
+    let n = (1u32 << zoom) as f64;
+    let x = (lon + 180.0) / 360.0 * n;
+    let lat_rad = lat.to_radians();
+    let y = (1.0 - lat_rad.tan().asinh() / PI) / 2.0 * n;
+    (x, y)
+}
+
 pub fn trajectory_3d_viewer(
     ui: &mut egui::Ui,
     v: &SdViewerState,
     selected_index: usize,
     dark_mode: bool,
+    tiles: Option<&mut dyn Tiles>,
 ) {
     let size = egui::vec2(ui.available_width(), ui.available_height().max(300.0));
     let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
     let center = response.rect.center();
 
-    let (points, _ref_origin) = build_trajectory(v);
+    let (points, ref_origin) = build_trajectory(v);
     if points.is_empty() {
         let tc = if dark_mode { egui::Color32::from_rgb(120, 120, 120) } else { egui::Color32::from_rgb(150, 150, 150) };
         painter.text(center, egui::Align2::CENTER_CENTER, "NO GPS DATA", egui::FontId::proportional(16.0), tc);
@@ -137,11 +211,11 @@ pub fn trajectory_3d_viewer(
     }
     let drag = response.drag_delta();
     if response.dragged_by(egui::PointerButton::Primary) {
-        cam_st.0 += drag.x * 0.008;
+        cam_st.0 -= drag.x * 0.008;
         cam_st.1 = (cam_st.1 - drag.y * 0.008).clamp(0.15, 2.9);
     }
     if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
-        cam_st.3 += egui::vec2(-drag.x, drag.y) * cam_st.2 * 0.0035;
+        cam_st.3 += egui::vec2(drag.x, drag.y) * cam_st.2 * 0.0035;
     }
     if response.hovered() {
         let sc = ui.input_mut(|i| {
@@ -161,19 +235,21 @@ pub fn trajectory_3d_viewer(
     let cdir = [pol.sin() * az.cos(), pol.sin() * az.sin(), -pol.cos()];
     let fwd = [-cdir[0], -cdir[1], -cdir[2]];
     let up_ref = [0.0_f64, 0.0, -1.0]; // -Z = Up in our rendering space
+    // Scene space is (East, North, Down) which is left-handed, so the view basis
+    // must be built as up x fwd / fwd x right or the whole image renders mirrored.
     let right = {
         let c = [
-            fwd[1] * up_ref[2] - fwd[2] * up_ref[1],
-            fwd[2] * up_ref[0] - fwd[0] * up_ref[2],
-            fwd[0] * up_ref[1] - fwd[1] * up_ref[0],
+            up_ref[1] * fwd[2] - up_ref[2] * fwd[1],
+            up_ref[2] * fwd[0] - up_ref[0] * fwd[2],
+            up_ref[0] * fwd[1] - up_ref[1] * fwd[0],
         ];
         let l = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().max(1e-9);
         [c[0] / l, c[1] / l, c[2] / l]
     };
     let up = [
-        right[1] * fwd[2] - right[2] * fwd[1],
-        right[2] * fwd[0] - right[0] * fwd[2],
-        right[0] * fwd[1] - right[1] * fwd[0],
+        fwd[1] * right[2] - fwd[2] * right[1],
+        fwd[2] * right[0] - fwd[0] * right[2],
+        fwd[0] * right[1] - fwd[1] * right[0],
     ];
 
     let (px, py) = (cam_st.3.x as f64, cam_st.3.y as f64);
@@ -209,32 +285,159 @@ pub fn trajectory_3d_viewer(
     let label_color = if dark_mode { egui::Color32::from_rgb(100, 100, 100) } else { egui::Color32::from_rgb(140, 140, 140) };
     let grid_color = if dark_mode { egui::Color32::from_rgb(40, 40, 40) } else { egui::Color32::from_rgb(210, 210, 210) };
 
-    // Draw ground grid at min altitude
+    // Draw ground plane at min altitude
     let grid_u = min_u;
-    let grid_steps = 5;
-    let grid_span_e = max_e - min_e;
-    let grid_span_n = max_n - min_n;
-    let grid_span = grid_span_e.max(grid_span_n).max(1.0);
-    let grid_step = grid_span / grid_steps as f64;
+    let mut drew_tiles = false;
 
-    for i in 0..=grid_steps {
-        let t = min_e + i as f64 * grid_step;
-        let a = to_scene(t, min_n, grid_u);
-        let b = to_scene(t, min_n + grid_span, grid_u);
-        let (pa, za) = project(a);
-        let (pb, zb) = project(b);
-        if za > 0.05 && zb > 0.05 {
-            painter.line_segment([pa, pb], egui::Stroke::new(0.5, grid_color));
+    if let (Some(tiles), Some((ref_lat, ref_lon, ref_alt))) = (tiles, ref_origin) {
+        // Compute lat/lon bounding box with some padding
+        let pad_e = (max_e - min_e).max(50.0) * 0.3;
+        let pad_n = (max_n - min_n).max(50.0) * 0.3;
+        let r = 6_371_000.0;
+        let ref_lat_rad = ref_lat.to_radians();
+
+        let south_lat = ref_lat + (min_n - pad_n) / r * (180.0 / PI);
+        let north_lat = ref_lat + (max_n + pad_n) / r * (180.0 / PI);
+        let west_lon = ref_lon + (min_e - pad_e) / (r * ref_lat_rad.cos()) * (180.0 / PI);
+        let east_lon = ref_lon + (max_e + pad_e) / (r * ref_lat_rad.cos()) * (180.0 / PI);
+
+        // Pick zoom so we get roughly 4-8 tiles across
+        let lon_span = (east_lon - west_lon).abs();
+        let zoom = ((360.0 / lon_span).log2().ceil() as u8).clamp(1, 18);
+
+        let (tx_min, ty_min) = lat_lon_to_tile_frac(north_lat, west_lon, zoom);
+        let (tx_max, ty_max) = lat_lon_to_tile_frac(south_lat, east_lon, zoom);
+        let tile_x_min = tx_min.floor() as u32;
+        let tile_x_max = tx_max.ceil() as u32;
+        let tile_y_min = ty_min.floor() as u32;
+        let tile_y_max = ty_max.ceil() as u32;
+
+        let max_tiles: u32 = 64;
+        let tile_count = (tile_x_max - tile_x_min) * (tile_y_max - tile_y_min);
+
+        if tile_count > 0 && tile_count <= max_tiles {
+            for ty in tile_y_min..tile_y_max {
+                for tx in tile_x_min..tile_x_max {
+                    let tile_id = TileId { x: tx, y: ty, zoom };
+                    if let Some(piece) = tiles.at(tile_id) {
+                        // Tile corner lat/lons
+                        let (nw_lat, nw_lon) = tile_to_lat_lon(tx, ty, zoom);
+                        let (se_lat, se_lon) = tile_to_lat_lon(tx + 1, ty + 1, zoom);
+
+                        // Tiles are axis-aligned in lat/lon, so the four corners collapse
+                        // to one east value per meridian and one north value per parallel.
+                        let (west_e, north_n, _) = geodetic_to_enu(nw_lat, nw_lon, ref_alt, ref_lat, ref_lon, ref_alt);
+                        let (east_e, south_n, _) = geodetic_to_enu(se_lat, se_lon, ref_alt, ref_lat, ref_lon, ref_alt);
+
+                        let uv = piece.uv;
+
+                        // Subdivide tile into a grid for correct perspective texturing
+                        // (egui does affine interpolation per triangle; small quads hide the error)
+                        let subdivs = 4u32;
+                        let walkers::Tile::Raster(ref tex) = piece.tile;
+                        let mut mesh = egui::Mesh::with_texture(tex.id());
+                        let white = egui::Color32::WHITE;
+                        let mut any_visible = false;
+
+                        for sy in 0..subdivs {
+                            for sx in 0..subdivs {
+                                let s0 = sx as f64 / subdivs as f64;
+                                let s1 = (sx + 1) as f64 / subdivs as f64;
+                                let t0 = sy as f64 / subdivs as f64;
+                                let t1 = (sy + 1) as f64 / subdivs as f64;
+
+                                // Bilinear interpolation of ENU corners
+                                let lerp = |a: f64, b: f64, t: f64| a + t * (b - a);
+                                let sub_corners_enu = [
+                                    (lerp(west_e, east_e, s0), lerp(north_n, south_n, t0)),
+                                    (lerp(west_e, east_e, s1), lerp(north_n, south_n, t0)),
+                                    (lerp(west_e, east_e, s1), lerp(north_n, south_n, t1)),
+                                    (lerp(west_e, east_e, s0), lerp(north_n, south_n, t1)),
+                                ];
+
+                                // t=0 is the tile's north edge, which is the image top (uv.min.y)
+                                let sub_uvs = [
+                                    egui::pos2(
+                                        lerp(uv.min.x as f64, uv.max.x as f64, s0) as f32,
+                                        lerp(uv.min.y as f64, uv.max.y as f64, t0) as f32,
+                                    ),
+                                    egui::pos2(
+                                        lerp(uv.min.x as f64, uv.max.x as f64, s1) as f32,
+                                        lerp(uv.min.y as f64, uv.max.y as f64, t0) as f32,
+                                    ),
+                                    egui::pos2(
+                                        lerp(uv.min.x as f64, uv.max.x as f64, s1) as f32,
+                                        lerp(uv.min.y as f64, uv.max.y as f64, t1) as f32,
+                                    ),
+                                    egui::pos2(
+                                        lerp(uv.min.x as f64, uv.max.x as f64, s0) as f32,
+                                        lerp(uv.min.y as f64, uv.max.y as f64, t1) as f32,
+                                    ),
+                                ];
+
+                                let projected: Vec<_> = sub_corners_enu.iter().map(|(e, n)| {
+                                    let s = to_scene(*e, *n, grid_u);
+                                    let (sp, z) = project(s);
+                                    (sp, z)
+                                }).collect();
+
+                                if projected.iter().any(|(_, z)| *z <= 0.05) {
+                                    continue;
+                                }
+
+                                let base = mesh.vertices.len() as u32;
+                                for i in 0..4 {
+                                    mesh.vertices.push(egui::epaint::Vertex {
+                                        pos: projected[i].0,
+                                        uv: sub_uvs[i],
+                                        color: white,
+                                    });
+                                }
+                                mesh.indices.extend_from_slice(&[
+                                    base, base + 1, base + 2,
+                                    base, base + 2, base + 3,
+                                ]);
+                                any_visible = true;
+                            }
+                        }
+
+                        if any_visible {
+                            painter.add(egui::Shape::mesh(mesh));
+                            drew_tiles = true;
+                        }
+                    }
+                }
+            }
         }
     }
-    for i in 0..=grid_steps {
-        let t = min_n + i as f64 * grid_step;
-        let a = to_scene(min_e, t, grid_u);
-        let b = to_scene(min_e + grid_span, t, grid_u);
-        let (pa, za) = project(a);
-        let (pb, zb) = project(b);
-        if za > 0.05 && zb > 0.05 {
-            painter.line_segment([pa, pb], egui::Stroke::new(0.5, grid_color));
+
+    // Fallback grid if no tiles
+    if !drew_tiles {
+        let grid_steps = 5;
+        let grid_span_e = max_e - min_e;
+        let grid_span_n = max_n - min_n;
+        let grid_span = grid_span_e.max(grid_span_n).max(1.0);
+        let grid_step = grid_span / grid_steps as f64;
+
+        for i in 0..=grid_steps {
+            let t = min_e + i as f64 * grid_step;
+            let a = to_scene(t, min_n, grid_u);
+            let b = to_scene(t, min_n + grid_span, grid_u);
+            let (pa, za) = project(a);
+            let (pb, zb) = project(b);
+            if za > 0.05 && zb > 0.05 {
+                painter.line_segment([pa, pb], egui::Stroke::new(0.5, grid_color));
+            }
+        }
+        for i in 0..=grid_steps {
+            let t = min_n + i as f64 * grid_step;
+            let a = to_scene(min_e, t, grid_u);
+            let b = to_scene(min_e + grid_span, t, grid_u);
+            let (pa, za) = project(a);
+            let (pb, zb) = project(b);
+            if za > 0.05 && zb > 0.05 {
+                painter.line_segment([pa, pb], egui::Stroke::new(0.5, grid_color));
+            }
         }
     }
 
